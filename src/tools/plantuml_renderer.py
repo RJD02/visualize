@@ -148,7 +148,7 @@ def generate_plantuml_from_plan(plan: ArchitecturePlan, overrides: dict | None =
     return diagrams
 
 
-def render_diagrams(diagrams: List[dict], output_name: str, output_format: str = "png") -> List[str]:
+def render_diagrams(diagrams: List[dict], output_name: str, output_format: str = "svg") -> List[str]:
     output_dir = ensure_dir(settings.output_dir)
     files = []
     for idx, diagram in enumerate(diagrams):
@@ -156,6 +156,7 @@ def render_diagrams(diagrams: List[dict], output_name: str, output_format: str =
         file_name = f"{output_name}_{diagram_type}_{idx + 1}"
         plantuml = diagram.get("plantuml", "@startuml\n@enduml")
         _validate_pure_plantuml(plantuml)
+        # Prefer SVG as the canonical output for downstream processing
         if output_format == "svg":
             image_path = render_plantuml_svg(plantuml, file_name)
         else:

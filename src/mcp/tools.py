@@ -12,18 +12,27 @@ from openai import OpenAI
 
 from src.agents.architect_agent import generate_architecture_plan_from_text
 from src.agents.visual_agent import build_visual_prompt
+from src.agents.sequence_agent import SequenceGenerationAgent
 from src.db_models import Image
 from src.models.architecture_plan import ArchitecturePlan
 from src.services.intent import explain_architecture
 from src.tools.github_ingest import ingest_github_repo
 from src.tools.image_versioning import add_version
 from src.tools.plantuml_renderer import generate_plantuml_from_plan, render_diagrams, render_diagram_by_type
+from src.tools.plantuml_sequence import generate_plantuml_sequence_from_architecture
 from src.tools.svg_ir import generate_svg_from_plan, edit_ir_svg
 from src.db_models import DiagramIR
 from src.tools.sdxl_renderer import run_sdxl, run_sdxl_edit
 from src.tools.text_extractor import extract_text
 from src.mcp.registry import MCPRegistry, MCPTool
 from src.utils.config import settings
+from src.renderers.renderer_ir import RendererIR
+from src.renderers.translator import ir_to_mermaid, ir_to_structurizr_dsl, ir_to_plantuml
+from src.renderers.mermaid_renderer import render_mermaid_svg
+from src.renderers.structurizr_renderer import render_structurizr_svg
+from src.renderers.plantuml_renderer import render_plantuml_svg_text
+from src.renderer import render_plantuml_svg
+from src.utils.file_utils import read_text_file
 
 
 def _parse_uuid(value: str | UUID) -> UUID:
@@ -134,6 +143,147 @@ def tool_ingest_github_repo(context: Dict[str, Any], repo_url: str) -> Dict[str,
     return ingest_github_repo(repo_url)
 
 
+def tool_generate_sequence_from_architecture(
+    context: Dict[str, Any],
+    architecture_plan: Dict[str, Any],
+    github_url: Optional[str] = None,
+    user_message: Optional[str] = None,
+    output_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Generate a sequence diagram from architecture plan using LLM.
+    
+    Args:
+        architecture_plan: The architecture plan dict
+        github_url: Optional GitHub URL for context
+        user_message: Optional user message for context
+        output_name: Optional output name for file
+        
+    Returns:
+        Dict with ir_entries containing the generated sequence diagram
+    """
+    if not architecture_plan:
+        raise ValueError("architecture_plan is required")
+    
+    agent = SequenceGenerationAgent()
+    sequence_data = agent.generate(
+        architecture_plan=architecture_plan,
+        github_url=github_url,
+        user_message=user_message,
+    )
+    
+    # Convert to StructuralIR format
+    from src.intent.semantic_ir_sequence import SequenceSemanticIR, SequenceParticipant, SequenceStep
+    from src.intent.semantic_to_structural import sequence_to_structural
+    from src.renderers.router import render_ir
+    from src.tools.svg_ir import render_ir_svg
+    
+    participants = [
+        SequenceParticipant(
+            id=p["id"],
+            name=p["name"],
+            type=p.get("type", "system")
+        )
+        for p in sequence_data.get("participants", [])
+    ]
+    
+    steps = [
+        SequenceStep(
+            from_id=s["from"],
+            to_id=s["to"],
+            message=s["message"],
+            order=s["order"]
+        )
+        for s in sequence_data.get("steps", [])
+    ]
+    
+    semantic_ir = SequenceSemanticIR(
+        title=sequence_data.get("title", "Sequence Diagram"),
+        participants=participants,
+        steps=steps,
+    )
+    
+    structural_ir = sequence_to_structural(semantic_ir)
+    svg_text, choice = render_ir(structural_ir)
+    
+    # Add metadata
+    from src.services.session_service import _ensure_ir_metadata
+    svg_text = _ensure_ir_metadata(svg_text, {
+        "diagram_type": "sequence",
+        "layout": structural_ir.layout,
+        "zone_order": [],
+        "nodes": [],
+        "edges": [],
+    })
+    
+    if output_name:
+        svg_file = render_ir_svg(svg_text, output_name)
+    else:
+        svg_file = None
+    
+    return {
+        "ir_entries": [{
+            "diagram_type": "sequence",
+            "svg": svg_text,
+            "svg_file": svg_file,
+            "reason": "Generated from architecture context"
+        }]
+    }
+
+
+def tool_generate_plantuml_sequence(
+    context: Dict[str, Any],
+    architecture_plan: Dict[str, Any],
+    output_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Generate a PlantUML sequence diagram directly from architecture plan.
+    No LLM needed - fast and reliable.
+    """
+    if not architecture_plan:
+        raise ValueError("architecture_plan is required")
+    
+    # Generate PlantUML text
+    plantuml_text = generate_plantuml_sequence_from_architecture(architecture_plan)
+    
+    # Render to SVG - this saves the file and returns the path
+    svg_path = render_plantuml_svg(plantuml_text, output_name or "sequence")
+    
+    # Read the SVG content
+    try:
+        svg_text = read_text_file(str(Path(svg_path)))
+    except Exception:
+        svg_text = Path(svg_path).read_text(encoding="utf-8", errors="ignore")
+    
+    return {
+        "ir_entries": [{
+            "diagram_type": "sequence",
+            "svg": svg_text,
+            "svg_file": svg_path,
+            "plantuml_text": plantuml_text,
+            "reason": "PlantUML sequence from architecture"
+        }]
+    }
+
+
+def tool_mermaid_renderer(context: Dict[str, Any], ir: Dict[str, Any]) -> Dict[str, Any]:
+    renderer_ir = RendererIR.parse_obj(ir)
+    svg_text = render_mermaid_svg(ir_to_mermaid(renderer_ir))
+    return {"svg": svg_text}
+
+
+def tool_structurizr_renderer(context: Dict[str, Any], ir: Dict[str, Any]) -> Dict[str, Any]:
+    renderer_ir = RendererIR.parse_obj(ir)
+    svg_text = render_structurizr_svg(ir_to_structurizr_dsl(renderer_ir))
+    return {"svg": svg_text}
+
+
+def tool_plantuml_renderer(context: Dict[str, Any], ir: Dict[str, Any]) -> Dict[str, Any]:
+    renderer_ir = RendererIR.parse_obj(ir)
+    svg_text = render_plantuml_svg_text(ir_to_plantuml(renderer_ir))
+    return {"svg": svg_text}
+
+
 
 def tool_edit_diagram_via_semantic_understanding(
     context: Dict[str, Any],
@@ -194,7 +344,7 @@ def tool_edit_diagram_ir(
         image = db.query(Image).filter(Image.ir_id == ir.id).order_by(Image.version.desc()).first()
         if image and image.file_path and image.file_path.endswith(".svg"):
             try:
-                svg_text = Path(image.file_path).read_text(encoding="utf-8")
+                svg_text = read_text_file(str(Path(image.file_path)))
             except Exception:
                 svg_text = ""
     if not svg_text:
@@ -308,6 +458,36 @@ def register_mcp_tools(registry: MCPRegistry) -> None:
     )
     registry.register(
         MCPTool(
+            name="mermaid_renderer",
+            description="Render renderer-agnostic IR using Mermaid (dockerized).",
+            input_schema={"type": "object", "properties": {"ir": {"type": "object"}}, "required": ["ir"]},
+            output_schema={"type": "object", "properties": {"svg": {"type": "string"}}},
+            side_effects="none",
+            handler=tool_mermaid_renderer,
+        )
+    )
+    registry.register(
+        MCPTool(
+            name="structurizr_renderer",
+            description="Render renderer-agnostic IR using Structurizr (dockerized).",
+            input_schema={"type": "object", "properties": {"ir": {"type": "object"}}, "required": ["ir"]},
+            output_schema={"type": "object", "properties": {"svg": {"type": "string"}}},
+            side_effects="none",
+            handler=tool_structurizr_renderer,
+        )
+    )
+    registry.register(
+        MCPTool(
+            name="plantuml_renderer",
+            description="Render renderer-agnostic IR using PlantUML (server).",
+            input_schema={"type": "object", "properties": {"ir": {"type": "object"}}, "required": ["ir"]},
+            output_schema={"type": "object", "properties": {"svg": {"type": "string"}}},
+            side_effects="none",
+            handler=tool_plantuml_renderer,
+        )
+    )
+    registry.register(
+        MCPTool(
             name="render_image_from_plan",
             description="Renders an SDXL image from an architecture plan.",
             input_schema={"type": "object", "properties": {"architecture_plan": {"type": "object"}, "output_name": {"type": "string"}}, "required": ["architecture_plan", "output_name"]},
@@ -384,5 +564,41 @@ def register_mcp_tools(registry: MCPRegistry) -> None:
             output_schema={"type": "object", "properties": {"repo_url": {"type": "string"}, "commit": {"type": "string"}, "summary": {"type": "object"}, "content": {"type": "string"}}},
             side_effects="clones repository to a temp directory",
             handler=tool_ingest_github_repo,
+        )
+    )
+    registry.register(
+        MCPTool(
+            name="generate_sequence_from_architecture",
+            description="Generate a meaningful sequence diagram from an architecture plan. Uses LLM to create realistic interaction flows based on the systems, services, and relationships in the architecture.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "architecture_plan": {"type": "object"},
+                    "github_url": {"type": "string"},
+                    "user_message": {"type": "string"},
+                    "output_name": {"type": "string"},
+                },
+                "required": ["architecture_plan"],
+            },
+            output_schema={"type": "object", "properties": {"ir_entries": {"type": "array"}}},
+            side_effects="writes diagram files",
+            handler=tool_generate_sequence_from_architecture,
+        )
+    )
+    registry.register(
+        MCPTool(
+            name="generate_plantuml_sequence",
+            description="Generate PlantUML sequence diagram directly from architecture plan. Fast, no LLM needed, works every time.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "architecture_plan": {"type": "object"},
+                    "output_name": {"type": "string"},
+                },
+                "required": ["architecture_plan"],
+            },
+            output_schema={"type": "object", "properties": {"ir_entries": {"type": "array"}}},
+            side_effects="writes diagram files",
+            handler=tool_generate_plantuml_sequence,
         )
     )

@@ -30,12 +30,14 @@ from src.intent.semantic_to_structural import (
     sequence_ir_from_text,
     sequence_to_structural,
 )
-from src.ir.structural_to_plantuml import structural_ir_to_plantuml
+from src.renderers.router import render_ir
 from src.ir.plan_to_semantic import plan_to_semantic_ir
 from src.ir.plantuml_adapter import ir_to_plantuml
 from src.renderer import render_plantuml, render_plantuml_svg
 from xml.etree import ElementTree as ET
 import json
+from src.utils.file_utils import read_text_file
+import logging
 
 
 def save_edited_ir(db: DbSession, image_id: str, svg_text: str, reason: str = "edited via ui") -> Image:
@@ -210,9 +212,7 @@ def ingest_input(
         if intent_result.primary == "story":
             story_ir = story_ir_from_text(content)
             structural_ir = story_to_structural(story_ir)
-            plantuml_text = structural_ir_to_plantuml(structural_ir)
-            svg_path = render_plantuml_svg(plantuml_text, f"{session.id}_story_1")
-            svg_text = Path(svg_path).read_text(encoding="utf-8")
+            svg_text, choice = render_ir(structural_ir)
             svg_text = _ensure_ir_metadata(svg_text, {
                 "diagram_type": "story",
                 "layout": structural_ir.layout,
@@ -227,7 +227,7 @@ def ingest_input(
                 svg_text=svg_text,
                 reason="story intent",
                 parent_ir_id=None,
-                ir_json={"intent": "story", "semantic_ir": story_ir.to_dict(), "structural_ir": structural_ir.to_dict(), "renderer": "plantuml"},
+                ir_json={"intent": "story", "semantic_ir": story_ir.to_dict(), "structural_ir": structural_ir.to_dict(), "renderer": choice.renderer},
             )
             svg_file = render_ir_svg(svg_text, f"{session.id}_story_1")
             image = _create_image(
@@ -254,9 +254,7 @@ def ingest_input(
         elif intent_result.primary == "sequence":
             seq_ir = sequence_ir_from_text(content)
             structural_ir = sequence_to_structural(seq_ir)
-            plantuml_text = structural_ir_to_plantuml(structural_ir)
-            svg_path = render_plantuml_svg(plantuml_text, f"{session.id}_sequence_1")
-            svg_text = Path(svg_path).read_text(encoding="utf-8")
+            svg_text, choice = render_ir(structural_ir)
             svg_text = _ensure_ir_metadata(svg_text, {
                 "diagram_type": "sequence",
                 "layout": structural_ir.layout,
@@ -271,7 +269,7 @@ def ingest_input(
                 svg_text=svg_text,
                 reason="sequence intent",
                 parent_ir_id=None,
-                ir_json={"intent": "sequence", "semantic_ir": seq_ir.to_dict(), "structural_ir": structural_ir.to_dict(), "renderer": "plantuml"},
+                ir_json={"intent": "sequence", "semantic_ir": seq_ir.to_dict(), "structural_ir": structural_ir.to_dict(), "renderer": choice.renderer},
             )
             svg_file = render_ir_svg(svg_text, f"{session.id}_sequence_1")
             image = _create_image(
@@ -296,23 +294,23 @@ def ingest_input(
                 )
             )
         elif plan_data:
+            # Use old working PlantUML generation - Structurizr renderer is broken
             if github_url:
                 diagram_types = ["system_context", "container", "component"]
             else:
                 diagram_types = plan_model.diagram_views or ["system_context"]
-            for idx, diagram_type in enumerate(diagram_types):
-                arch_ir = architecture_ir_from_plan(plan_model, diagram_type=diagram_type)
-                structural_ir = architecture_to_structural(arch_ir)
-                plantuml_text = structural_ir_to_plantuml(structural_ir)
-                svg_path = render_plantuml_svg(plantuml_text, f"{session.id}_{diagram_type}_{idx + 1}")
-                svg_text = Path(svg_path).read_text(encoding="utf-8")
-                svg_text = _ensure_ir_metadata(svg_text, {
-                    "diagram_type": diagram_type,
-                    "layout": structural_ir.layout,
-                    "zone_order": ["clients", "edge", "core_services", "external_services", "data_stores"],
-                    "nodes": [],
-                    "edges": [],
-                })
+            
+            # Generate using PlantUML directly (old working method)
+            diagrams = generate_plantuml_from_plan(plan_model)
+            files = render_diagrams(diagrams, f"{session.id}")
+            
+            for idx, (diagram_type, file_path) in enumerate(zip(diagram_types, files)):
+                # Read the SVG content
+                try:
+                    svg_text = read_text_file(str(Path(file_path)))
+                except Exception:
+                    svg_text = Path(file_path).read_text(encoding="utf-8", errors="ignore")
+                
                 ir_version = _create_ir_version(
                     db,
                     session,
@@ -320,13 +318,13 @@ def ingest_input(
                     svg_text=svg_text,
                     reason="architecture intent",
                     parent_ir_id=None,
-                    ir_json={"intent": diagram_type, "semantic_ir": arch_ir.to_dict(), "structural_ir": structural_ir.to_dict(), "renderer": "plantuml"},
+                    ir_json={"intent": diagram_type},
                 )
-                svg_file = render_ir_svg(svg_text, f"{session.id}_{diagram_type}_{idx + 1}")
+                
                 image = _create_image(
                     db,
                     session,
-                    file_path=svg_file,
+                    file_path=file_path,
                     prompt=None,
                     reason=f"diagram: {diagram_type}",
                     parent_image_id=None,
@@ -387,6 +385,9 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
             for img in images
         ],
         "history": history,
+        "github_url": session.source_repo,
+        "input_text": session.input_text,
+        "architecture_plan": plan.data if plan else None,
     }
 
     if not plan and not images and not ir_versions:
@@ -428,7 +429,7 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
             svg_text = target_ir.svg_text
             if not svg_text and target_img and target_img.file_path and target_img.file_path.endswith(".svg"):
                 try:
-                    svg_text = Path(target_img.file_path).read_text(encoding="utf-8")
+                    svg_text = read_text_file(str(Path(target_img.file_path)))
                 except Exception:
                     svg_text = ""
             if not svg_text:
@@ -480,8 +481,20 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
                 "tool_results": [],
             }
 
-    plan_result = planner.plan(message, state, mcp_registry.list_tools())
-    intent = plan_result.get("intent", "clarify")
+    # Aggressive fallback: detect sequence/plantuml/flow requests BEFORE calling planner
+    lowered_msg = (message or "").lower()
+    if plan and any(keyword in lowered_msg for keyword in ["sequence", "plantuml", "plant uml", "flow", "interaction"]):
+        # Direct sequence generation - bypass planner
+        intent = "generate_sequence"
+        plan_result = {
+            "intent": "generate_sequence",
+            "plan": [{"tool": "generate_plantuml_sequence", "arguments": {}}],
+            "diagram_count": None,
+            "diagrams": [{"type": "sequence", "reason": "user requested"}],
+        }
+    else:
+        plan_result = planner.plan(message, state, mcp_registry.list_tools())
+        intent = plan_result.get("intent", "clarify")
 
     def _looks_like_color_request(text: str) -> bool:
         lowered = (text or "").lower()
@@ -552,7 +565,7 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
                     types = latest_plan.data.get("diagram_views") or []
                     args["diagram_types"] = list(types)[:diagram_count]
 
-        if tool_name in {"generate_plantuml", "render_image_from_plan", "explain_architecture"}:
+        if tool_name in {"generate_plantuml", "render_image_from_plan", "explain_architecture", "generate_sequence_from_architecture", "generate_plantuml_sequence"}:
             if not args.get("architecture_plan"):
                 latest_plan = get_latest_plan(db, session.id)
                 if latest_plan:
@@ -560,6 +573,18 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
                 else:
                     response_text = "I need an architecture plan to do that. Please generate from input first."
                     break
+
+        if tool_name == "generate_sequence_from_architecture":
+            if "github_url" not in args and session.source_repo:
+                args["github_url"] = session.source_repo
+            if "user_message" not in args:
+                args["user_message"] = message
+            if "output_name" not in args:
+                args["output_name"] = f"{session.id}_sequence_{_next_version(db, session.id)}"
+        
+        if tool_name == "generate_plantuml_sequence":
+            if "output_name" not in args:
+                args["output_name"] = f"{session.id}_sequence_{_next_version(db, session.id)}"
 
         if tool_name == "generate_architecture_plan" and "content" not in args:
             if session.input_text:
@@ -593,7 +618,7 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
             plan_data = tool_output.get("architecture_plan")
             if plan_data:
                 db.add(ArchitecturePlanRecord(session_id=session.id, data=plan_data))
-        elif tool_name in {"generate_plantuml", "generate_diagram", "generate_multiple_diagrams", "edit_diagram_via_semantic_understanding", "edit_diagram_ir"}:
+        elif tool_name in {"generate_plantuml", "generate_diagram", "generate_multiple_diagrams", "edit_diagram_via_semantic_understanding", "edit_diagram_ir", "generate_sequence_from_architecture", "generate_plantuml_sequence"}:
             for entry in tool_output.get("ir_entries", []) or []:
                 diagram_type = entry.get("diagram_type") or "diagram"
                 svg_text = entry.get("svg")
@@ -660,7 +685,12 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
 
     if tool_results:
         if assistant_messages:
-            response_text = ""
+            # Created image messages, provide informative text
+            diagram_types = set(msg.diagram_type for msg in assistant_messages if msg.diagram_type)
+            if diagram_types:
+                response_text = f"Generated {', '.join(sorted(diagram_types))} diagram(s)."
+            else:
+                response_text = ""
         else:
             response_text = result.get("explanation") or "Done."
     elif intent == "edit_image":
@@ -753,6 +783,13 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
     elif intent == "explain":
         response_text = explain_architecture(plan.data if plan else {}, message)
         result = {}
+    elif intent == "generate_sequence":
+        # Should have been handled by tool execution loop
+        if not tool_results:
+            response_text = "Failed to generate sequence diagram. Please check if architecture plan exists."
+        else:
+            response_text = ""
+        result = {}
     else:
         response_text = "Can you clarify what change or explanation you want?"
         result = {}
@@ -830,6 +867,10 @@ def _create_ir_version(
     last = db.execute(
         select(DiagramIR).where(DiagramIR.session_id == session.id).order_by(DiagramIR.version.desc())
     ).scalars().first()
+    if svg_text is None:
+        logging.getLogger(__name__).warning("Creating IR version with empty svg_text for session %s diagram %s", session.id, diagram_type)
+        svg_text = ""
+
     ir_version = DiagramIR(
         session_id=session.id,
         diagram_type=diagram_type,
