@@ -1,14 +1,31 @@
-"""Renderer router and orchestration."""
+"""Renderer router: choose renderer based on intent."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Tuple
 
-from src.renderers.renderer_ir import RendererIR
-from src.renderers.translator import ir_to_mermaid, ir_to_plantuml, ir_to_structurizr_dsl
-from src.renderers.mermaid_renderer import render_mermaid_svg
-from src.renderers.structurizr_renderer import render_structurizr_svg
-from src.renderers.plantuml_renderer import render_plantuml_svg_text
+
+def choose_renderer(intent: str) -> Tuple[str, str]:
+    """Return (renderer_name, justification).
+
+    Renderers: mermaid, structurizr, plantuml
+    """
+    if intent in ("story", "sequence"):
+        return "mermaid", "story/sequence -> mermaid"
+    if intent in ("system_context", "container", "component"):
+        return "structurizr", "architecture intents -> structurizr"
+    return "plantuml", "fallback -> plantuml"
+
+
+from dataclasses import dataclass
+from typing import Optional, Tuple as Tup
+
+from src.ir.schemas import StructuralIR as StructuralSchema
+from src.translation.translators import (
+    structural_to_mermaid,
+    structural_to_structurizr,
+    structural_to_plantuml,
+)
+from src.renderers import fake_renderers
 
 
 @dataclass(frozen=True)
@@ -17,33 +34,79 @@ class RendererChoice:
     reason: str
 
 
-def choose_renderer(ir: RendererIR, override: Optional[str] = None) -> RendererChoice:
+def render_ir(ir: StructuralIR, override: Optional[str] = None) -> Tup[str, RendererChoice]:
+    """Render structural IR using translators and fake renderers (POC).
+
+    Returns (svg_text, RendererChoice)
+    """
+    # Normalize IR to dict-based StructuralIR (dataclass) for translators
+    if isinstance(ir, StructuralSchema):
+        struct = ir
+    else:
+        nodes = []
+        for n in getattr(ir, "nodes", []) or []:
+            if isinstance(n, dict):
+                nodes.append(n)
+            else:
+                nodes.append({
+                    "id": getattr(n, "id", None) or getattr(n, "ID", None),
+                    "label": getattr(n, "label", None) or getattr(n, "name", None) or getattr(n, "id", None),
+                    "type": getattr(n, "type", None) or getattr(n, "kind", None) or "Component",
+                })
+
+        edges = []
+        for e in getattr(ir, "edges", []) or []:
+            if isinstance(e, dict):
+                edges.append(e)
+            else:
+                src = getattr(e, "from_", None) or getattr(e, "from", None) or getattr(e, "source", None)
+                tgt = getattr(e, "to", None) or getattr(e, "to_id", None) or getattr(e, "target", None)
+                edges.append({"source": src, "target": tgt, "label": getattr(e, "label", None)})
+
+        struct = StructuralSchema(nodes=nodes, edges=edges)
+
+    # Decide renderer
     if override:
-        return RendererChoice(renderer=override, reason="override")
+        renderer = override
+        reason = "override"
+    else:
+        # Force mermaid for explicit sequence IRs
+        if getattr(ir, "diagram_kind", "") == "sequence" or getattr(struct, "diagram_kind", "") == "sequence":
+            renderer = "mermaid"
+            reason = "explicit sequence diagram"
+        else:
+            # simple heuristics: if any edge label contains '->' or steps, choose mermaid
+            edge_labels = " ".join([e.get("label", "") for e in (struct.edges or [])])
+            if any(k in edge_labels for k in ("->", "step", "then", "requests", "reads", "writes")):
+                renderer = "mermaid"
+                reason = "edge labels indicate sequence/flow"
+            else:
+                renderer = "structurizr"
+                reason = "default architecture renderer"
 
-    kind = (ir.diagram_kind or "").lower()
-    if kind in {"sequence", "flow", "story"}:
-        return RendererChoice(renderer="mermaid", reason=f"diagram_kind={kind}")
-    if kind in {"architecture", "system", "container", "component"}:
-        return RendererChoice(renderer="structurizr", reason=f"diagram_kind={kind}")
+    # Translate and render
+    if renderer == "mermaid":
+        inp = structural_to_mermaid(struct)
+        try:
+            # lazy import to avoid heavy deps at module import time
+            from src.renderers.mermaid_renderer import render_mermaid_svg as _render_mermaid_svg
 
-    node_kinds = {n.kind.lower() for n in ir.nodes}
-    if node_kinds & {"person", "system", "container", "component", "database", "external", "service", "api"}:
-        return RendererChoice(renderer="structurizr", reason="node kinds indicate architecture")
+            svg = _render_mermaid_svg(inp)
+            ok = True
+        except Exception:
+            ok, svg = fake_renderers.render_mermaid(inp)
+    elif renderer == "structurizr":
+        # prefer a conversion pipeline that yields SVG: StructuralIR -> PlantUML -> SVG
+        try:
+            from src.renderers.structurizr_renderer import render_structurizr_svg_from_structural
 
-    return RendererChoice(renderer="plantuml", reason="default to plantuml")
+            svg = render_structurizr_svg_from_structural(struct)
+            ok = True
+        except Exception:
+            inp = structural_to_structurizr(struct)
+            ok, svg = fake_renderers.render_structurizr(inp)
+    else:
+        inp = structural_to_plantuml(struct)
+        ok, svg = fake_renderers.render_plantuml(inp)
 
-
-def render_ir(ir: RendererIR, override: Optional[str] = None) -> Tuple[str, RendererChoice]:
-    choice = choose_renderer(ir, override=override)
-    if choice.renderer == "mermaid":
-        mermaid_text = ir_to_mermaid(ir)
-        svg = render_mermaid_svg(mermaid_text)
-        return svg, choice
-    if choice.renderer == "structurizr":
-        dsl = ir_to_structurizr_dsl(ir)
-        svg = render_structurizr_svg(dsl)
-        return svg, choice
-    plantuml_text = ir_to_plantuml(ir)
-    svg = render_plantuml_svg_text(plantuml_text)
-    return svg, choice
+    return svg, RendererChoice(renderer=renderer, reason=reason)

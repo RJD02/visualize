@@ -16,7 +16,7 @@ PLANNER_SYSTEM = (
     "You MUST choose from the provided MCP tools. "
     "Use ONLY JSON and match this schema:\n"
     "{\n"
-    "  \"intent\": \"explain|edit_image|diagram_change|regenerate|clarify\",\n"
+    "  \"intent\": \"explain|edit_image|diagram_change|regenerate|clarify|generate_sequence\",\n"
     "  \"diagram_count\": number or null,\n"
     "  \"diagrams\": [\n"
     "    {\"type\": \"system_context|container|component|sequence|other\", \"reason\": \"string\"}\n"
@@ -32,6 +32,7 @@ PLANNER_SYSTEM = (
     "Rules:\n"
     "- If explain: intent=explain and plan should call explain_architecture.\n"
     "- If the user provides a GitHub URL: intent=regenerate and plan should call ingest_github_repo, then generate_architecture_plan and generate_multiple_diagrams.\n"
+    "- If the user asks to generate/create a SEQUENCE diagram or PLANTUML diagram or flow diagram, AND state.has_architecture_plan is true: intent=generate_sequence and plan=[{tool: 'generate_sequence_from_architecture', arguments: {}}].\n"
     "- If multiple diagrams are needed: use generate_multiple_diagrams and include diagram_types in tool arguments.\n"
     "- If a single diagram type is requested: use generate_diagram.\n"
     "- If diagram type change: intent=diagram_change and plan should call generate_diagram when needed.\n"
@@ -39,7 +40,8 @@ PLANNER_SYSTEM = (
     "- If regenerate: intent=regenerate and plan should call generate_architecture_plan then generate_multiple_diagrams.\n"
     "- If unclear: intent=clarify and plan should be empty.\n"
     "- If diagram_count is provided, do not exceed it.\n"
-    "- Choose target_image_id as the most recent image unless the user references a specific version."
+    "- Choose target_image_id as the most recent image unless the user references a specific version.\n"
+    "- CRITICAL: When user says 'generate sequence diagram' or 'create plantuml' or similar, and has_architecture_plan=true, you MUST use generate_sequence_from_architecture tool!"
 )
 
 
@@ -103,6 +105,9 @@ class ConversationPlannerAgent:
                 "diagram_types": state.get("diagram_types", []),
                 "images": _safe_list(state.get("images", []), ["id", "version", "reason"]),
                 "history": state.get("history", []),
+                "github_url": state.get("github_url"),
+                "has_architecture_plan": bool(state.get("architecture_plan")),
+                "input_text": state.get("input_text"),
             },
             "requested_diagram_count": _extract_diagram_count(message),
         }

@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from src.utils.config import settings
 from src.utils.file_utils import ensure_dir
+from src.utils.file_utils import read_text_file
 
 
 def save_json(name: str, payload: Dict[str, Any]) -> str:
@@ -28,7 +29,7 @@ def load_json(name: str) -> Dict[str, Any]:
     path = Path(output_dir) / name
     if not path.exists():
         raise FileNotFoundError(f"Missing file: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(read_text_file(str(path)))
 
 
 def load_text(name: str) -> str:
@@ -36,4 +37,4 @@ def load_text(name: str) -> str:
     path = Path(output_dir) / name
     if not path.exists():
         raise FileNotFoundError(f"Missing file: {path}")
-    return path.read_text(encoding="utf-8")
+    return read_text_file(str(path))

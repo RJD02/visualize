@@ -7,6 +7,7 @@ from typing import Dict, List
 
 from src.utils.config import settings
 from src.utils.file_utils import ensure_dir
+from src.utils.file_utils import read_text_file
 
 
 def _manifest_path(name: str) -> Path:
@@ -18,7 +19,7 @@ def load_versions(name: str) -> List[Dict[str, str]]:
     path = _manifest_path(name)
     if not path.exists():
         return []
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(read_text_file(str(path)))
 
 
 def add_version(name: str, image_file: str) -> List[Dict[str, str]]:

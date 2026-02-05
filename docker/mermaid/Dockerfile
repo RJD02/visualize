@@ -1,3 +1,9 @@
+FROM node:18-alpine
+WORKDIR /app
+RUN npm install -g @mermaid-js/mermaid-cli@9
+# Entrypoint expectation (POC): accept input file and output SVG
+# e.g. mermaid-cli -i input.mmd -o output.svg --configFile none
+CMD ["mmdc", "-h"]
 FROM node:20-alpine
 
 RUN apk add --no-cache chromium nss freetype harfbuzz ttf-freefont

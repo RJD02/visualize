@@ -1,1 +1,1 @@
-"""Renderer router and IR utilities."""
+"""Renderer router and renderer implementations."""

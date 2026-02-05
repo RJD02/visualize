@@ -39,6 +39,7 @@ from src.services.session_service import (
 from src.animation_resolver import inject_animation, validate_presentation_spec
 from src.animation.diagram_renderer import render_svg
 from src.intent.semantic_aesthetic_ir import SemanticAestheticIR
+from src.utils.file_utils import read_text_file
 import src.animation.svg_parser as svg_parser_module
 import src.animation.animation_plan_generator as plan_module
 import src.animation.css_injector as css_module
@@ -294,7 +295,10 @@ def render_diagram_api(payload: dict, db: DbSession = Depends(get_db)):
             root = Path(file_path)
             if not root.exists():
                 raise HTTPException(status_code=404, detail='SVG file not found')
-            svg_text = root.read_text(encoding="utf-8")
+            try:
+                svg_text = read_text_file(str(root))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
@@ -371,7 +375,10 @@ def render_diagram_svg(
             raise HTTPException(status_code=404, detail="SVG file not found")
         if path.suffix.lower() != ".svg":
             raise HTTPException(status_code=400, detail="Requested file is not an SVG. Regenerate diagrams as SVG.")
-        svg_text = path.read_text(encoding="utf-8")
+        try:
+            svg_text = read_text_file(str(path))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
 
     if svg_text is None or not str(svg_text).strip():
         raise HTTPException(status_code=400, detail="No svg source provided")

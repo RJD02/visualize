@@ -94,8 +94,13 @@ def architecture_to_structural(ir: ArchitectureSemanticIR) -> StructuralIR:
             members.append(node_id)
         groups.append(StructuralGroup(id=group_id, label=group_id.replace("_", " "), members=members))
 
+    # Assign ordering for relationships that contain descriptions (likely sequence-like)
+    described = [r for r in ir.relationships if getattr(r, "description", None)]
+    desc_index = {id(r): i + 1 for i, r in enumerate(described)}
     for rel in ir.relationships:
-        edges.append(StructuralEdge(**{"from": rel.from_, "to": rel.to, "type": rel.type, "label": rel.description}))
+        label = getattr(rel, "description", None)
+        order = desc_index.get(id(rel))
+        edges.append(StructuralEdge(**{"from": rel.from_, "to": rel.to, "type": rel.type, "label": label, "order": order}))
 
     return StructuralIR(
         diagram_kind="architecture",
