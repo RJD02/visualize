@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test All Animations - Nodes, Text & Edges</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: #0f172a;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: #f8fafc;
+        }
+
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .info {
+            color: #94a3b8;
+            margin-bottom: 20px;
+            text-align: center;
+            max-width: 600px;
+        }
+
+        .info ul {
+            list-style: none;
+            margin-top: 10px;
+        }
+
+        .info li {
+            padding: 5px 0;
+        }
+
+        .info li::before {
+            content: "✓ ";
+            color: #10b981;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+
+        .svg-container {
+            background: #1e293b;
+            border: 2px solid #334155;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+            max-width: 95%;
+            overflow: auto;
+        }
+
+        svg {
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+
+        .legend {
+            margin-top: 30px;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 20px;
+            max-width: 600px;
+            text-align: left;
+        }
+
+        .legend h3 {
+            color: #f8fafc;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+            padding: 10px;
+            background: #0f172a;
+            border-radius: 6px;
+        }
+
+        .legend-icon {
+            width: 40px;
+            height: 40px;
+            margin-right: 15px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+
+        .legend-icon.rect {
+            background: #E5E7EB;
+            border: 2px solid #181818;
+        }
+
+        .legend-icon.text {
+            background: transparent;
+            border: 2px dashed #94a3b8;
+            color: #94a3b8;
+            font-size: 12px;
+        }
+
+        .legend-icon.edge {
+            background: transparent;
+            border-bottom: 3px solid #181818;
+            border-radius: 0;
+            height: 20px;
+        }
+
+        .legend-text {
+            flex: 1;
+        }
+
+        .legend-text strong {
+            color: #f8fafc;
+            display: block;
+            margin-bottom: 3px;
+        }
+
+        .legend-text small {
+            color: #64748b;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🎬 Complete Animation Test</h1>
+    <div class="info">
+        <p><strong>Real PlantUML SVG with All Animations</strong></p>
+        <ul>
+            <li><strong>Node Rectangles:</strong> Pulsing opacity (0.5 ↔ 1.0)</li>
+            <li><strong>Text Labels:</strong> Pulsing with their parent nodes</li>
+            <li><strong>Edges:</strong> Marching ants effect (stroke-dashoffset)</li>
+        </ul>
+    </div>
+
+    <div class="svg-container" id="svg-container">
+        <p style="color: #94a3b8; text-align: center;">Loading animated SVG...</p>
+    </div>
+
+    <div class="legend">
+        <h3>Animation Guide</h3>
+        <div class="legend-item">
+            <div class="legend-icon rect">█</div>
+            <div class="legend-text">
+                <strong>Node Rectangles</strong>
+                <small>Pulsing opacity animation (1.5s, infinite, alternate)</small>
+            </div>
+        </div>
+        <div class="legend-item">
+            <div class="legend-icon text">Abc</div>
+            <div class="legend-text">
+                <strong>Text Labels</strong>
+                <small>Synchronized with parent node (same timing)</small>
+            </div>
+        </div>
+        <div class="legend-item">
+            <div class="legend-icon edge"></div>
+            <div class="legend-text">
+                <strong>Connection Edges</strong>
+                <small>Marching ants effect (1.0s, infinite, continuous flow)</small>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Fetch animated SVG from Python
+        async function loadAnimatedSVG() {
+            try {
+                // Read the SVG file
+                const response = await fetch('outputs/fc35c385-00a3-473b-9f45-7289e307698b_system_context_1.svg');
+                const svgText = await response.text();
+
+                // Call Python to generate animated version
+                const animResponse = await fetch('http://localhost:8000/api/diagram/render-animated', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        svg: svgText,
+                        animated: true
+                    })
+                });
+
+                const animated = await animResponse.text();
+
+                // Inject into container
+                document.getElementById('svg-container').innerHTML = animated;
+
+                console.log('✅ Animated SVG loaded successfully');
+            } catch (error) {
+                document.getElementById('svg-container').innerHTML =
+                    `<p style="color: #ef4444;">Error loading SVG: ${error.message}</p>
+                     <p style="color: #94a3b8; margin-top: 10px;">Make sure the backend server is running on port 8000</p>`;
+                console.error('Error:', error);
+            }
+        }
+
+        // Load on page load
+        loadAnimatedSVG();
+    </script>
+</body>
+
+</html>

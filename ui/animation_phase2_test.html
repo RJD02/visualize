@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>SVG Animation Diagnostic</title>
+    <style>
+        body {
+            background: #0f172a;
+            color: white;
+            font-family: monospace;
+            padding: 20px;
+        }
+
+        .test-section {
+            background: #1e293b;
+            border: 2px solid #334155;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        h2 {
+            color: #60a5fa;
+        }
+
+        button {
+            background: #6366f1;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 5px;
+        }
+
+        button:hover {
+            background: #4f46e5;
+        }
+
+        #output {
+            background: #0f172a;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-size: 12px;
+        }
+
+        .pass {
+            color: #22c55e;
+        }
+
+        .fail {
+            color: #ef4444;
+        }
+
+        .info {
+            color: #60a5fa;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🔬 SVG Animation Phase 2 & 3 Tests</h1>
+    <p>Following investigation_4.md systematic testing</p>
+
+    <div class="test-section">
+        <h2>Test 1: Simple Blinking Animation</h2>
+        <p>This SVG should have elements blinking visibly:</p>
+        <svg width="400" height="200" style="border: 1px solid #334155;">
+            <style>
+                @keyframes test-blink {
+                    0% {
+                        opacity: 1;
+                    }
+
+                    50% {
+                        opacity: 0.2;
+                    }
+
+                    100% {
+                        opacity: 1;
+                    }
+                }
+
+                #test-rect {
+                    animation: test-blink 1s infinite;
+                }
+
+                #test-text {
+                    animation: test-blink 1.5s infinite;
+                }
+            </style>
+            <rect id="test-rect" x="50" y="50" width="100" height="60" fill="#60a5fa" />
+            <text id="test-text" x="60" y="85" fill="white" font-size="14">Blinking</text>
+            <circle id="test-circle" cx="300" cy="80" r="30" fill="#f59e0b" />
+        </svg>
+        <div style="margin-top: 10px;">
+            <strong>Expected:</strong> Blue rectangle and white text should blink visibly.
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>Test 2: Paintability Test (Phase 2)</h2>
+        <button onclick="runPaintabilityTest()">Run Paintability Test</button>
+        <p>This will test if we can paint/modify SVG elements directly.</p>
+    </div>
+
+    <div class="test-section">
+        <h2>Test 3: Load Real Animated SVG from API</h2>
+        <button onclick="loadFromAPI()">Fetch & Display Animated SVG</button>
+        <div id="api-svg-container" style="margin-top: 15px;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Test 4: Force Animation (Phase 3)</h2>
+        <button onclick="forceAnimation()">Inject Forced Animation</button>
+        <button onclick="removeForceAnimation()">Remove Forced Animation</button>
+        <p>This will forcefully inject animations to confirm SVG is animatable.</p>
+    </div>
+
+    <div id="output"></div>
+
+    <script>
+        const log = (msg, type = 'info') => {
+            const output = document.getElementById('output');
+            const div = document.createElement('div');
+            div.className = type;
+            div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            output.appendChild(div);
+            output.scrollTop = output.scrollHeight;
+        };
+
+        function runPaintabilityTest() {
+            log('=== PHASE 2: PAINTABILITY TEST ===', 'info');
+
+            const svg = document.querySelector('svg');
+            const rect = svg.querySelector('#test-rect');
+            const text = svg.querySelector('#test-text');
+            const circle = svg.querySelector('#test-circle');
+
+            log(`Found ${svg ? 1 : 0} SVG element`, svg ? 'pass' : 'fail');
+            log(`Found ${rect ? 1 : 0} rect element`, rect ? 'pass' : 'fail');
+            log(`Found ${text ? 1 : 0} text element`, text ? 'pass' : 'fail');
+            log(`Found ${circle ? 1 : 0} circle element`, circle ? 'pass' : 'fail');
+
+            if (rect) {
+                log('', 'info');
+                log('Testing rect paintability...', 'info');
+                const original = rect.style.fill;
+                rect.style.fill = 'red';
+                rect.style.opacity = '0.3';
+                log('Changed rect to red with opacity 0.3', 'pass');
+                log('Look at the SVG - did the blue rectangle turn red/transparent?', 'info');
+
+                setTimeout(() => {
+                    rect.style.fill = original || '';
+                    rect.style.opacity = '';
+                    log('Restored original styles', 'info');
+                }, 3000);
+            }
+        }
+
+        async function loadFromAPI() {
+            log('=== LOADING FROM API ===', 'info');
+            try {
+                // Get latest session
+                const sessionsResp = await fetch('/api/sessions');
+                const sessions = await sessionsResp.json();
+                if (sessions.length === 0) {
+                    log('No sessions found. Generate a diagram first.', 'fail');
+                    return;
+                }
+
+                const sessionId = sessions[sessions.length - 1].id;
+                log(`Using session: ${sessionId}`, 'pass');
+
+                // Get images
+                const imagesResp = await fetch(`/api/sessions/${sessionId}/images`);
+                const images = await imagesResp.json();
+                if (images.length === 0) {
+                    log('No images found. Generate a diagram first.', 'fail');
+                    return;
+                }
+
+                const imageId = images[images.length - 1].id;
+                log(`Using image: ${imageId}`, 'pass');
+
+                // Fetch animated SVG
+                log('Fetching animated SVG...', 'info');
+                const svgResp = await fetch(`/api/diagram/render?format=svg&animated=true&image_id=${imageId}`);
+                const data = await svgResp.json();
+
+                log('SVG fetched successfully!', 'pass');
+
+                // Inject into container
+                const container = document.getElementById('api-svg-container');
+                container.innerHTML = data.svg;
+
+                log('SVG rendered. Check if animations are visible!', 'pass');
+
+                // Run diagnostics
+                setTimeout(() => {
+                    const svg = container.querySelector('svg');
+                    if (svg) {
+                        const rects = svg.querySelectorAll('rect');
+                        const paths = svg.querySelectorAll('path, line');
+                        const styles = svg.querySelectorAll('style');
+
+                        log('', 'info');
+                        log(`Found ${rects.length} <rect> elements`, 'info');
+                        log(`Found ${paths.length} <path>/<line> elements`, 'info');
+                        log(`Found ${styles.length} <style> elements`, 'info');
+
+                        if (styles.length > 0) {
+                            const styleContent = styles[0].textContent;
+                            const hasKeyframes = styleContent.includes('@keyframes');
+                            const hasAnimations = styleContent.includes('animation:');
+                            log(`Has @keyframes: ${hasKeyframes}`, hasKeyframes ? 'pass' : 'fail');
+                            log(`Has animation rules: ${hasAnimations}`, hasAnimations ? 'pass' : 'fail');
+                        }
+                    }
+                }, 500);
+
+            } catch (err) {
+                log(`Error: ${err.message}`, 'fail');
+            }
+        }
+
+        function forceAnimation() {
+            log('=== PHASE 3: FORCING ANIMATION ===', 'info');
+
+            const container = document.getElementById('api-svg-container');
+            const svg = container.querySelector('svg');
+
+            if (!svg) {
+                log('No SVG loaded. Load from API first!', 'fail');
+                return;
+            }
+
+            // Remove existing forced styles
+            const existing = svg.querySelector('#forced-animation-style');
+            if (existing) existing.remove();
+
+            // Add stroke-dasharray to all paths/lines
+            const paths = svg.querySelectorAll('path, line');
+            log(`Adding stroke-dasharray to ${paths.length} paths/lines...`, 'info');
+            paths.forEach(p => {
+                if (!p.getAttribute('stroke-dasharray')) {
+                    p.setAttribute('stroke-dasharray', '5 5');
+                }
+                p.style.animation = 'forced-flow 1s linear infinite';
+            });
+
+            // Add opacity animation to all rects
+            const rects = svg.querySelectorAll('rect');
+            log(`Adding opacity animation to ${rects.length} rects...`, 'info');
+            rects.forEach(r => {
+                r.style.animation = 'forced-pulse 1s ease-in-out infinite alternate';
+            });
+
+            // Inject keyframes
+            const style = document.createElement('style');
+            style.id = 'forced-animation-style';
+            style.textContent = `
+                @keyframes forced-flow {
+                    from { stroke-dashoffset: 20; }
+                    to { stroke-dashoffset: 0; }
+                }
+                @keyframes forced-pulse {
+                    from { opacity: 0.3; }
+                    to { opacity: 1; }
+                }
+            `;
+            svg.appendChild(style);
+
+            log('Forced animations injected!', 'pass');
+            log('If you see animations now, CSS works and SVG is animatable!', 'pass');
+            log('If still no animation, there may be a blocking layer.', 'info');
+        }
+
+        function removeForceAnimation() {
+            const container = document.getElementById('api-svg-container');
+            const svg = container.querySelector('svg');
+            if (!svg) return;
+
+            const style = svg.querySelector('#forced-animation-style');
+            if (style) style.remove();
+
+            svg.querySelectorAll('path, line, rect').forEach(el => {
+                el.style.animation = '';
+            });
+
+            log('Forced animations removed.', 'info');
+        }
+
+        // Auto-log on load
+        window.addEventListener('load', () => {
+            log('Diagnostic tool loaded. Test 1 should be blinking!', 'info');
+        });
+    </script>
+</body>
+
+</html>

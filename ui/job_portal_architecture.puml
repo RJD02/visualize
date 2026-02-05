@@ -1,0 +1,65 @@
+@startuml Job Portal Go Architecture
+
+!define ICONURL https://raw.githubusercontent.com/tupadr3/plantuml-icon-font-sprites/master
+skinparam backgroundColor #f5f5f5
+skinparam componentBackgroundColor #ffffff
+skinparam componentBorderColor #3498db
+skinparam packageBackgroundColor #ecf0f1
+skinparam arrowColor #2c3e50
+skinparam sequenceArrowThickness 2
+
+title Job Portal Go - System Architecture
+
+package "External" {
+    [Web Browser] as browser
+    [Email Service] as email
+}
+
+package "API Layer" {
+    [Chi Router] as router
+    [CORS Middleware] as cors
+    [Auth Middleware] as authmw
+}
+
+package "Controllers" {
+    [Auth Controller] as authctrl
+    [Job Controller] as jobctrl
+}
+
+package "Services" {
+    [JWT Service] as jwt
+    [Mail Service] as mail
+    [Password Hash] as hash
+}
+
+package "Data Layer" {
+    [Prisma Client] as prisma
+    database "PostgreSQL" as db
+}
+
+package "Config" {
+    [App Config] as config
+}
+
+' Connections
+browser --> router : HTTP Requests
+router --> cors : Process
+cors --> authmw : Validate Token
+authmw --> authctrl : /auth/*
+authmw --> jobctrl : /jobs/*
+
+authctrl --> jwt : Generate/Validate
+authctrl --> hash : Hash Password
+authctrl --> mail : Send Magic Link
+mail --> email : SMTP
+
+authctrl --> prisma : User CRUD
+jobctrl --> prisma : Job CRUD
+prisma --> db : SQL Queries
+
+config --> router : Port, Settings
+config --> jwt : Secret Key
+config --> mail : Gmail Creds
+config --> prisma : DB Connection
+
+@enduml

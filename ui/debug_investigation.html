@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SVG Animation Debug Test - Investigation 3</title>
+    <style>
+        body {
+            background: #1a1a2e;
+            color: white;
+            font-family: 'Consolas', monospace;
+            padding: 20px;
+            margin: 0;
+        }
+        h1 { color: #60a5fa; }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .svg-panel {
+            flex: 2;
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 20px;
+            overflow: auto;
+            max-height: 70vh;
+        }
+        .log-panel {
+            flex: 1;
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 20px;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+        .log-entry { 
+            margin: 4px 0; 
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .log-entry.pass { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+        .log-entry.fail { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+        .log-entry.info { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
+        .log-entry.warn { background: rgba(234, 179, 8, 0.2); color: #eab308; }
+        button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 4px;
+        }
+        button:hover { background: #2563eb; }
+        #svg-container svg {
+            max-width: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔬 SVG Animation Debug - Investigation 3</h1>
+    
+    <div style="margin-bottom: 20px;">
+        <button onclick="runStep1()">Step 1: DOM Check</button>
+        <button onclick="runStep2()">Step 2: Selector Check</button>
+        <button onclick="runStep3()">Step 3: Force Change</button>
+        <button onclick="runStep4()">Step 4: Inject Debug Animation</button>
+        <button onclick="clearLog()">Clear Log</button>
+    </div>
+    
+    <div class="container">
+        <div class="svg-panel">
+            <h3>SVG Diagram (Inline)</h3>
+            <div id="svg-container">Loading SVG...</div>
+        </div>
+        <div class="log-panel">
+            <h3>Debug Log</h3>
+            <div id="log"></div>
+        </div>
+    </div>
+
+    <script>
+        const logEl = document.getElementById('log');
+        
+        function log(msg, type = 'info') {
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            logEl.appendChild(entry);
+            logEl.scrollTop = logEl.scrollHeight;
+            console.log(msg);
+        }
+        
+        function clearLog() {
+            logEl.innerHTML = '';
+        }
+
+        // Load the animated SVG
+        async function loadSvg() {
+            try {
+                const response = await fetch('/job_portal_animated_pure.svg');
+                const svgText = await response.text();
+                document.getElementById('svg-container').innerHTML = svgText;
+                log('SVG loaded and injected inline', 'pass');
+                
+                // Auto-run step 1
+                setTimeout(runStep1, 500);
+            } catch (e) {
+                log('Failed to load SVG: ' + e.message, 'fail');
+            }
+        }
+
+        // STEP 1: DOM Reality Check
+        function runStep1() {
+            log('=== STEP 1: DOM REALITY CHECK ===', 'info');
+            
+            const svgCount = document.querySelectorAll('svg').length;
+            log(`document.querySelectorAll("svg").length = ${svgCount}`, svgCount > 0 ? 'pass' : 'fail');
+            
+            const groupCount = document.querySelectorAll('svg g').length;
+            log(`document.querySelectorAll("svg g").length = ${groupCount}`, groupCount > 0 ? 'pass' : 'fail');
+            
+            const styleCount = document.querySelectorAll('svg style').length;
+            log(`document.querySelectorAll("svg style").length = ${styleCount}`, styleCount > 0 ? 'pass' : 'fail');
+            
+            if (styleCount > 0) {
+                const styleEl = document.querySelector('svg style');
+                const hasKeyframes = styleEl.textContent.includes('@keyframes');
+                log(`Style contains @keyframes: ${hasKeyframes}`, hasKeyframes ? 'pass' : 'fail');
+                
+                const keyframeCount = (styleEl.textContent.match(/@keyframes/g) || []).length;
+                log(`Number of @keyframes rules: ${keyframeCount}`, 'info');
+                
+                const hasAnimation = styleEl.textContent.includes('animation:');
+                log(`Style contains animation rules: ${hasAnimation}`, hasAnimation ? 'pass' : 'fail');
+            }
+            
+            // Check if SVG is inline (not in shadow DOM or iframe)
+            const svgEl = document.querySelector('svg');
+            if (svgEl) {
+                const isInDocument = document.contains(svgEl);
+                log(`SVG is in main document (not shadow DOM): ${isInDocument}`, isInDocument ? 'pass' : 'warn');
+            }
+        }
+
+        // STEP 2: Selector Check
+        function runStep2() {
+            log('=== STEP 2: SELECTOR VALIDATION ===', 'info');
+            
+            const styleEl = document.querySelector('svg style');
+            if (!styleEl) {
+                log('No style element found!', 'fail');
+                return;
+            }
+            
+            // Extract animation selectors
+            const selectorMatches = styleEl.textContent.matchAll(/(#[a-zA-Z_][a-zA-Z0-9_-]*)\s*\{[^}]*animation:/g);
+            const selectors = [...selectorMatches].map(m => m[1]);
+            const uniqueSelectors = [...new Set(selectors)];
+            
+            log(`Found ${uniqueSelectors.length} animation selectors`, 'info');
+            
+            let matchCount = 0;
+            let failCount = 0;
+            
+            uniqueSelectors.slice(0, 10).forEach(sel => {
+                const matches = document.querySelectorAll(sel).length;
+                if (matches > 0) {
+                    matchCount++;
+                    log(`${sel} → ${matches} match(es)`, 'pass');
+                } else {
+                    failCount++;
+                    log(`${sel} → NO MATCH!`, 'fail');
+                }
+            });
+            
+            if (uniqueSelectors.length > 10) {
+                log(`... and ${uniqueSelectors.length - 10} more selectors`, 'info');
+            }
+            
+            log(`Summary: ${matchCount} valid, ${failCount} broken`, failCount === 0 ? 'pass' : 'fail');
+        }
+
+        // STEP 3: Force Visible Change
+        function runStep3() {
+            log('=== STEP 3: FORCE VISIBLE CHANGE ===', 'info');
+            
+            const firstGroup = document.querySelector('svg g[data-kind="node"]');
+            if (firstGroup) {
+                log('Found a node group, applying test styles...', 'info');
+                
+                // Test 1: Change opacity
+                firstGroup.style.opacity = '0.3';
+                log('Set opacity to 0.3 - should be dimmed', 'info');
+                
+                setTimeout(() => {
+                    firstGroup.style.opacity = '';
+                    log('Reset opacity', 'info');
+                }, 1500);
+            } else {
+                log('No node group found', 'fail');
+            }
+            
+            const firstLine = document.querySelector('svg line');
+            if (firstLine) {
+                log('Found a line element, changing stroke...', 'info');
+                const origStroke = firstLine.getAttribute('stroke');
+                firstLine.setAttribute('stroke', 'red');
+                firstLine.setAttribute('stroke-width', '4');
+                log('Set stroke to RED, width 4 - should be visible', 'info');
+                
+                setTimeout(() => {
+                    firstLine.setAttribute('stroke', origStroke || '#94a3b8');
+                    firstLine.setAttribute('stroke-width', '2');
+                    log('Reset stroke', 'info');
+                }, 2000);
+            }
+        }
+
+        // STEP 4: Inject Guaranteed Animation
+        function runStep4() {
+            log('=== STEP 4: INJECT DEBUG ANIMATION ===', 'info');
+            
+            const svg = document.querySelector('svg');
+            if (!svg) {
+                log('No SVG found!', 'fail');
+                return;
+            }
+            
+            // Create and inject debug animation
+            const debugStyle = document.createElement('style');
+            debugStyle.textContent = `
+                svg g[data-kind="node"] rect {
+                    animation: debugBlink 0.5s infinite alternate !important;
+                }
+                svg line {
+                    stroke: #ff6b6b !important;
+                    stroke-dasharray: 8 4 !important;
+                    animation: debugFlow 0.5s linear infinite !important;
+                }
+                @keyframes debugBlink {
+                    from { opacity: 1; fill: #3b82f6; }
+                    to { opacity: 0.5; fill: #60a5fa; }
+                }
+                @keyframes debugFlow {
+                    from { stroke-dashoffset: 24; }
+                    to { stroke-dashoffset: 0; }
+                }
+            `;
+            svg.appendChild(debugStyle);
+            
+            log('Injected debug animation with !important', 'pass');
+            log('Nodes should BLINK (blue color change)', 'info');
+            log('Lines should FLOW (red marching ants)', 'info');
+            log('If you see this animation, CSS animations ARE working!', 'warn');
+        }
+
+        // Load SVG on page load
+        loadSvg();
+    </script>
+</body>
+</html>

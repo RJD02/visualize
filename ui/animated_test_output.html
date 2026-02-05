@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Animated SVG Test</title>
+    <style>
+        body { background: #1e293b; padding: 20px; }
+        h1 { color: white; font-family: sans-serif; }
+        p { color: #94a3b8; font-family: sans-serif; }
+    </style>
+</head>
+<body>
+    <h1>Animated SVG Test - Should be blinking/pulsing</h1>
+    <p>If you see elements fading in and out, animations are working!</p>
+    <svg xmlns="http://www.w3.org/2000/svg" width="960" height="720" viewBox="0 0 960 720" data-diagram-type="system_context"><style>:root {
+  --color-service: #0f172a;
+  --color-db: #1e293b;
+  --color-client: #334155;
+  --color-external: #475569;
+  --color-gateway: #64748b;
+  --color-border: #94a3b8;
+  --color-text: #f8fafc;
+}
+.node-rect { fill: var(--color-service); stroke: var(--color-border); }
+.node-text { fill: var(--color-text); font-size: 12px; font-family: Arial, sans-serif; }
+.edge-line { stroke: var(--color-border); stroke-width: 2; }
+.zone-rect { fill: none; stroke: var(--color-border); stroke-width: 1; }
+.zone-text { fill: var(--color-border); font-size: 11px; font-family: Arial, sans-serif; }
+
+/* SVG-safe animation defaults */
+svg * { transform-box: fill-box; transform-origin: center; }
+:root {
+  --anim-node-fill: #e2e8f0;
+  --anim-node-stroke: #475569;
+  --anim-edge-active: #38bdf8;
+  --anim-text: #0f172a;
+  --anim-font: system-ui;
+  --anim-font-weight: 500;
+}
+
+/* Node pulse animation - subtle scale and opacity */
+@keyframes animNodePulse {
+  0% { opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { opacity: 0.4; }
+}
+/* Edge flow animation - stroke dash offset creates flow effect */
+@keyframes animEdgeFlow {
+  0% { stroke-dashoffset: 30; }
+  100% { stroke-dashoffset: 0; }
+}
+/* Debug blink - proves animation is working */
+@keyframes debugBlink {
+  0% { opacity: 0.2; }
+  100% { opacity: 1; }
+}
+svg g { animation: debugBlink 0.5s infinite alternate; }
+#label_title rect, #label_title circle, #label_title ellipse, #label_title polygon, #label_title path { fill: var(--anim-node-fill); stroke: var(--anim-node-stroke); }
+#label_title text { fill: var(--anim-text); font-family: var(--anim-font); font-weight: var(--anim-font-weight); }
+#label_title { animation: animNodePulse 1.5s ease-in-out 0.00s infinite; }
+#boundary_clients rect, #boundary_clients circle, #boundary_clients ellipse, #boundary_clients polygon, #boundary_clients path { fill: var(--anim-node-fill); stroke: var(--anim-node-stroke); }
+#boundary_clients text { fill: var(--anim-text); font-family: var(--anim-font); font-weight: var(--anim-font-weight); }
+#boundary_clients { animation: animNodePulse 1.5s ease-in-out 0.10s infinite; }
+#node_apps_jira_plus_plus rect, #node_apps_jira_plus_plus circle, #node_apps_jira_plus_plus ellipse, #node_apps_jira_plus_plus polygon, #node_apps_jira_plus_plus path { fill: var(--anim-node-fill); stroke: var(--anim-node-stroke); }
+#node_apps_jira_plus_plus text { fill: var(--anim-text); font-family: var(--anim-font); font-weight: var(--anim-font-weight); }
+#node_apps_jira_plus_plus { animation: animNodePulse 1.5s ease-in-out 0.20s infinite; }
+#boundary_edge rect, #boundary_edge circle, #boundary_edge ellipse, #boundary_edge polygon, #boundary_edge path { fill: var(--anim-node-fill); stroke: var(--anim-node-stroke); }
+#boundary_edge text { fill: var(--anim-text); font-family: var(--anim-font); font-weight: var(--anim-font-weight); }
+#boundary_edge { animation: animNodePulse 1.5s ease-in-out 0.30s infinite; }
+#node_apps_api rect, #node_apps_api circle, #node_apps_api ellipse, #node_apps_api polygon, #node_apps_api path { fill: var(--anim-node-fill); stroke: var(--anim-node-stroke); }
+#node_apps_api text { fill: var(--anim-text); font-family: var(--anim-font); font-weight: var(--anim-font-weight); }
+#node_apps_api { animation: animNodePulse 1.5s ease-in-out 0.40s infinite; }
+#boundary_core_services rect, #boundary_core_services circle, #boundary_core_services ellipse, #boundary_core_services polygon, #boundary_core_services path { fill: var(--anim-node-fill); stroke: var(--anim-node-stroke); }
+#boundary_core_services text { fill: var(--anim-text); font-family: var(--anim-font); font-weight: var(--anim-font-weight); }
+#boundary_core_services { animation: animNodePulse 1.5s ease-in-out 0.50s infinite; }
+#node_packages_cdm rect, #node_packages_cdm circle, #node_packages_cdm ellipse, #node_packages_cdm polygon, #node_packages_cdm path { fill: var(--anim-node-fill); stroke: var(--anim-node-stroke); }
+#node_packages_cdm text { fill: var(--anim-text); font-family: var(--anim-font); font-weight: var(--anim-font-weight); }
+#node_packages_cdm { animation: animNodePulse 1.5s ease-in-out 0.60s infinite; }
+#boundary_external_services rect, #boundary_external_services circle, #boundary_external_services ellipse, #boundary_external_services polygon, #boundary_external_services path { fill: var(--anim-node-fill); stroke: var(--anim-node-stroke); }
+#boundary_external_services text { fill: var(--anim-text); font-family: var(--anim-font); font-weight: var(--anim-font-weight); }
+#boundary_external_services { animation: animNodePulse 1.5s ease-in-out 0.70s infinite; }
+#boundary_data_stores rect, #boundary_data_stores circle, #boundary_data_stores ellipse, #boundary_data_stores polygon, #boundary_data_stores path { fill: var(--anim-node-fill); stroke: var(--anim-node-stroke); }
+#boundary_data_stores text { fill: var(--anim-text); font-family: var(--anim-font); font-weight: var(--anim-font-weight); }
+#boundary_data_stores { animation: animNodePulse 1.5s ease-in-out 0.80s infinite; }
+#edge_apps_jira_plus_plus_apps_api_sync_line path, #edge_apps_jira_plus_plus_apps_api_sync_line line, #edge_apps_jira_plus_plus_apps_api_sync_line polyline { stroke: var(--anim-edge-active); }
+#edge_apps_jira_plus_plus_apps_api_sync_line path, #edge_apps_jira_plus_plus_apps_api_sync_line line, #edge_apps_jira_plus_plus_apps_api_sync_line polyline { stroke-dasharray: 10 5; animation: animEdgeFlow 1s linear 0.90s infinite; }
+</style><g id="label_title" data-kind="label" data-role="title"><text id="label_title_text" class="zone-text" x="24" y="24">C4 Context Diagram</text></g><metadata id="ir_metadata">{"diagram_type": "system_context", "layout": "left-to-right", "zone_order": ["clients", "edge", "core_services", "external_services", "data_stores"], "nodes": [{"node_id": "node_apps_jira_plus_plus", "label": "apps/jira-plus-plus", "role": "client", "zone": "clients"}, {"node_id": "node_apps_api", "label": "apps/api", "role": "gateway", "zone": "edge"}, {"node_id": "node_packages_cdm", "label": "packages/cdm", "role": "service", "zone": "core_services"}], "edges": [{"edge_id": "edge_apps_jira_plus_plus_apps_api_sync", "from_id": "node_apps_jira_plus_plus", "to_id": "node_apps_api", "rel_type": "sync"}]}</metadata><g id="boundary_clients" data-kind="boundary" data-role="clients"><rect id="boundary_clients_rect" class="zone-rect" x="20" y="40" width="140" height="640" fill="none" /><text id="boundary_clients_label" class="zone-text" x="26" y="56">clients</text></g><g id="boundary_edge" data-kind="boundary" data-role="edge"><rect id="boundary_edge_rect" class="zone-rect" x="140" y="40" width="140" height="640" fill="none" /><text id="boundary_edge_label" class="zone-text" x="146" y="56">edge</text></g><g id="boundary_core_services" data-kind="boundary" data-role="core_services"><rect id="boundary_core_services_rect" class="zone-rect" x="260" y="40" width="140" height="640" fill="none" /><text id="boundary_core_services_label" class="zone-text" x="266" y="56">core_services</text></g><g id="boundary_external_services" data-kind="boundary" data-role="external_services"><rect id="boundary_external_services_rect" class="zone-rect" x="380" y="40" width="140" height="640" fill="none" /><text id="boundary_external_services_label" class="zone-text" x="386" y="56">external_services</text></g><g id="boundary_data_stores" data-kind="boundary" data-role="data_stores"><rect id="boundary_data_stores_rect" class="zone-rect" x="500" y="40" width="140" height="640" fill="none" /><text id="boundary_data_stores_label" class="zone-text" x="506" y="56">data_stores</text></g><g id="node_apps_jira_plus_plus" data-kind="node" data-role="client"><rect id="node_apps_jira_plus_plus_rect" class="node-rect" x="40" y="60" width="140" height="48" fill="var(--color-client)" /><text id="node_apps_jira_plus_plus_text" class="node-text" x="48" y="88">apps/jira-plus-plus</text></g><g id="node_apps_api" data-kind="node" data-role="gateway"><rect id="node_apps_api_rect" class="node-rect" x="160" y="60" width="140" height="48" fill="var(--color-gateway)" /><text id="node_apps_api_text" class="node-text" x="168" y="88">apps/api</text></g><g id="node_packages_cdm" data-kind="node" data-role="service"><rect id="node_packages_cdm_rect" class="node-rect" x="280" y="60" width="140" height="48" fill="var(--color-service)" /><text id="node_packages_cdm_text" class="node-text" x="288" y="88">packages/cdm</text></g><g id="edge_apps_jira_plus_plus_apps_api_sync" data-kind="edge" data-role="sync"><line id="edge_apps_jira_plus_plus_apps_api_sync_line" class="edge-line" x1="180" y1="84" x2="160" y2="84" stroke="var(--color-border)" /></g></svg>
+</body>
+</html>

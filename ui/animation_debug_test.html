@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SVG Animation Debug Test</title>
+    <style>
+        body { background: #f5f5f5; padding: 20px; font-family: sans-serif; }
+        .container { background: white; padding: 20px; margin: 10px 0; border-radius: 8px; }
+        h2 { color: #333; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <h1>SVG Animation Debug Test</h1>
+    
+    <div class="container">
+        <h2>Test 1: Direct rect opacity animation (should pulse)</h2>
+        <svg width="200" height="60" viewBox="0 0 200 60">
+            <style>
+                @keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+                #testRect { animation: pulse 1.5s ease-in-out infinite; }
+            </style>
+            <rect id="testRect" x="10" y="10" width="180" height="40" fill="#3b82f6"/>
+        </svg>
+    </div>
+    
+    <div class="container">
+        <h2>Test 2: Group opacity animation (should pulse entire group)</h2>
+        <svg width="200" height="60" viewBox="0 0 200 60">
+            <style>
+                @keyframes pulse2 { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+                #testGroup { animation: pulse2 1.5s ease-in-out infinite; }
+            </style>
+            <g id="testGroup">
+                <rect x="10" y="10" width="180" height="40" fill="#10b981"/>
+                <text x="100" y="35" text-anchor="middle" fill="white">Group Test</text>
+            </g>
+        </svg>
+    </div>
+    
+    <div class="container">
+        <h2>Test 3: Path stroke-dashoffset animation (marching ants - should move)</h2>
+        <svg width="300" height="60" viewBox="0 0 300 60">
+            <style>
+                @keyframes march { 
+                    0% { stroke-dashoffset: 30; } 
+                    100% { stroke-dashoffset: 0; } 
+                }
+                #testPath { 
+                    stroke-dasharray: 10 5;
+                    animation: march 1s linear infinite;
+                }
+            </style>
+            <path id="testPath" d="M 20 30 L 280 30" stroke="#ef4444" stroke-width="3" fill="none"/>
+        </svg>
+    </div>
+    
+    <div class="container">
+        <h2>Test 4: Group containing path - animate the GROUP (FAILS)</h2>
+        <svg width="300" height="60" viewBox="0 0 300 60">
+            <style>
+                @keyframes march2 { 
+                    0% { stroke-dashoffset: 30; } 
+                    100% { stroke-dashoffset: 0; } 
+                }
+                #testLinkGroup { 
+                    stroke-dasharray: 10 5;
+                    animation: march2 1s linear infinite;
+                }
+            </style>
+            <g id="testLinkGroup">
+                <path d="M 20 30 L 280 30" stroke="#f59e0b" stroke-width="3" fill="none"/>
+                <text x="150" y="50" text-anchor="middle" fill="#666" font-size="12">This won't animate!</text>
+            </g>
+        </svg>
+    </div>
+    
+    <div class="container">
+        <h2>Test 5: Group containing path - animate PATH directly via descendant (WORKS)</h2>
+        <svg width="300" height="60" viewBox="0 0 300 60">
+            <style>
+                @keyframes march3 { 
+                    0% { stroke-dashoffset: 30; } 
+                    100% { stroke-dashoffset: 0; } 
+                }
+                #testLinkGroup2 path { 
+                    stroke-dasharray: 10 5;
+                    animation: march3 1s linear infinite;
+                }
+            </style>
+            <g id="testLinkGroup2">
+                <path d="M 20 30 L 280 30" stroke="#8b5cf6" stroke-width="3" fill="none"/>
+                <text x="150" y="50" text-anchor="middle" fill="#666" font-size="12">This animates!</text>
+            </g>
+        </svg>
+    </div>
+    
+    <p style="margin-top:20px; color:#666;">
+        <strong>Conclusion:</strong> stroke-dashoffset animation must target the actual path/line element, 
+        not the parent group. CSS properties like stroke-dasharray don't inherit to children in SVG.
+    </p>
+</body>
+</html>

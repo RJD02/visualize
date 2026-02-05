@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Animation Investigation - Following investigation_3.md</title>
+    <meta charset="utf-8">
+    <style>
+        body {
+            background: #1a1a2e;
+            color: #f8fafc;
+            font-family: 'Segoe UI', monospace, sans-serif;
+            padding: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: #60a5fa;
+            margin-bottom: 5px;
+        }
+
+        h2 {
+            color: #34d399;
+            border-bottom: 2px solid #334155;
+            padding-bottom: 5px;
+            margin-top: 30px;
+        }
+
+        .instruction {
+            background: #0f172a;
+            border-left: 4px solid #60a5fa;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .warning {
+            background: #451a03;
+            border-left: 4px solid #f59e0b;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        #output {
+            background: #0f172a;
+            border: 1px solid #334155;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+            max-height: 500px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+
+        .log {
+            padding: 2px 0;
+        }
+
+        .pass {
+            color: #22c55e;
+        }
+
+        .fail {
+            color: #ef4444;
+        }
+
+        .info {
+            color: #60a5fa;
+        }
+
+        .warning-text {
+            color: #f59e0b;
+        }
+
+        button {
+            background: #6366f1;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 5px 10px 5px 0;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        button:hover {
+            background: #4f46e5;
+        }
+
+        button:disabled {
+            background: #374151;
+            cursor: not-allowed;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn-success {
+            background: #22c55e;
+        }
+
+        .btn-success:hover {
+            background: #16a34a;
+        }
+
+        .controls {
+            background: #0f172a;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        code {
+            background: #1e293b;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+
+        .svg-preview {
+            background: #0f172a;
+            border: 2px solid #334155;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            max-height: 600px;
+            overflow: auto;
+        }
+
+        .step {
+            margin: 25px 0;
+            padding: 15px;
+            background: #1e293b;
+            border-radius: 6px;
+        }
+
+        .step-num {
+            background: #6366f1;
+            color: white;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🔬 SVG Animation Investigation Tool</h1>
+    <p style="color: #94a3b8; margin-top: 0;">Systematic debugging following <code>investigation_3.md</code></p>
+
+    <div class="warning">
+        <strong>⚠️ CRITICAL:</strong> This investigation MUST be done with the actual UI running at
+        <strong>http://localhost:5173</strong>. Open it in a separate tab, generate a diagram, click on it,
+        enable "Inline SVG" and "Animation" checkboxes, then come back here and run the diagnostics.
+    </div>
+
+    <div class="controls">
+        <h2>🎯 Quick Actions</h2>
+        <button onclick="openMainUI()">Open Main UI (localhost:5173)</button>
+        <button onclick="testStaticHTML()">Test Static HTML Animation</button>
+        <button onclick="fetchAndTestAPI()">Fetch SVG from API</button>
+    </div>
+
+    <div class="step">
+        <h2><span class="step-num">1</span> STEP 1: Load and Observe</h2>
+        <div class="instruction">
+            <strong>Instructions:</strong>
+            <ol>
+                <li>Open <a href="http://localhost:5173" target="_blank"
+                        style="color: #60a5fa;">http://localhost:5173</a></li>
+                <li>Generate a diagram (paste code or GitHub URL)</li>
+                <li>Click on the generated diagram thumbnail</li>
+                <li>Enable "Inline SVG" checkbox</li>
+                <li>Enable "Animation" checkbox</li>
+                <li>Observe: Do you see animations? (YES/NO)</li>
+                <li>Come back here and click "Run Step 2 Diagnostics"</li>
+            </ol>
+        </div>
+    </div>
+
+    <div class="step">
+        <h2><span class="step-num">2</span> STEP 2: DOM Reality Check</h2>
+        <button onclick="runStep2Diagnostics()">Run Step 2 Diagnostics</button>
+        <button onclick="copyDiagnosticScript()">Copy Script to Clipboard</button>
+        <p style="color: #94a3b8; font-size: 13px;">
+            This will check if SVG elements exist and if animation CSS is properly applied.
+            You can also copy the script and run it directly in the main UI's console.
+        </p>
+    </div>
+
+    <div class="step">
+        <h2><span class="step-num">3</span> STEP 3: Force Visual Change Test</h2>
+        <button onclick="runStep3Test()">Run Step 3 Test</button>
+        <p style="color: #94a3b8; font-size: 13px;">
+            This will attempt to manually modify SVG elements to verify they can be changed.
+        </p>
+    </div>
+
+    <div class="step">
+        <h2><span class="step-num">4</span> STEP 4: Inject Test Animation</h2>
+        <button onclick="runStep4TestAnimation()" class="btn-success">Inject Test Animation</button>
+        <button onclick="removeTestAnimation()" class="btn-danger">Remove Test Animation</button>
+        <p style="color: #94a3b8; font-size: 13px;">
+            This will inject a guaranteed-to-work blinking animation to verify the browser CAN animate SVG.
+        </p>
+    </div>
+
+    <h2>📊 Diagnostic Output</h2>
+    <div id="output"></div>
+
+    <h2>🖼️ SVG Preview (for API tests)</h2>
+    <div id="svg-preview" class="svg-preview"></div>
+
+    <script>
+        const log = (message, type = 'info') => {
+            const output = document.getElementById('output');
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            div.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            output.appendChild(div);
+            output.scrollTop = output.scrollHeight;
+        };
+
+        const clear = () => {
+            document.getElementById('output').innerHTML = '';
+        };
+
+        const openMainUI = () => {
+            window.open('http://localhost:5173', '_blank');
+            log('Opened main UI in new tab', 'info');
+        };
+
+        const runStep2Diagnostics = () => {
+            clear();
+            log('=== STEP 2: DOM REALITY CHECK ===', 'info');
+            log('Looking for SVG elements in THIS page...', 'info');
+
+            const svgs = document.querySelectorAll('svg');
+            log(`SVG elements found: ${svgs.length}`, svgs.length > 0 ? 'pass' : 'fail');
+
+            if (svgs.length === 0) {
+                log('❌ NO SVG FOUND IN THIS PAGE!', 'fail');
+                log('', 'info');
+                log('To properly test the main UI:', 'warning-text');
+                log('1. Open http://localhost:5173 in a NEW tab', 'warning-text');
+                log('2. Generate and open a diagram', 'warning-text');
+                log('3. Enable "Inline SVG" and "Animation" checkboxes', 'warning-text');
+                log('4. Open browser DevTools Console (F12)', 'warning-text');
+                log('5. Run this script there:', 'warning-text');
+                log('', 'info');
+                log('--- COPY THIS SCRIPT ---', 'info');
+                log(getDiagnosticScript(), 'info');
+                log('--- END SCRIPT ---', 'info');
+                return;
+            }
+
+            const svg = svgs[0];
+            log(`✓ SVG is inline: ${svg.tagName === 'svg'}`, 'pass');
+
+            const svgGroups = svg.querySelectorAll('g');
+            log(`✓ SVG <g> elements: ${svgGroups.length}`, 'pass');
+
+            const svgStyles = svg.querySelectorAll('style');
+            log(`✓ <style> tags in SVG: ${svgStyles.length}`, svgStyles.length > 0 ? 'pass' : 'fail');
+
+            if (svgStyles.length > 0) {
+                const styleContent = svgStyles[0].textContent;
+                const hasKeyframes = styleContent.includes('@keyframes');
+                const hasAnimationRules = styleContent.includes('animation:');
+                log(`${hasKeyframes ? '✓' : '❌'} Has @keyframes: ${hasKeyframes}`, hasKeyframes ? 'pass' : 'fail');
+                log(`${hasAnimationRules ? '✓' : '❌'} Has animation rules: ${hasAnimationRules}`, hasAnimationRules ? 'pass' : 'fail');
+            }
+
+            const testSelectors = ['#title_text', '#node_browser_rect', '#edge_browser_router_line'];
+            log('', 'info');
+            log('Testing animation target selectors:', 'info');
+            testSelectors.forEach(selector => {
+                const matches = svg.querySelectorAll(selector);
+                const found = matches.length > 0;
+                log(`${found ? '✓' : '❌'} ${selector}: ${matches.length} match(es)`, found ? 'pass' : 'fail');
+
+                if (found) {
+                    const computed = window.getComputedStyle(matches[0]);
+                    const animName = computed.animationName;
+                    const animDur = computed.animationDuration;
+                    log(`   → animation-name: ${animName}`, animName !== 'none' ? 'pass' : 'fail');
+                    log(`   → animation-duration: ${animDur}`, animDur !== '0s' ? 'pass' : 'fail');
+                }
+            });
+
+            const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            log('', 'info');
+            log(`${prefersReducedMotion ? '⚠️' : '✓'} Prefers reduced motion: ${prefersReducedMotion}`, prefersReducedMotion ? 'warning-text' : 'pass');
+        };
+
+        const runStep3Test = () => {
+            log('', 'info');
+            log('=== STEP 3: FORCE VISUAL CHANGE TEST ===', 'info');
+            const svg = document.querySelector('svg');
+            if (!svg) {
+                log('❌ No SVG found to test!', 'fail');
+                return;
+            }
+
+            const firstG = svg.querySelector('g');
+            if (!firstG) {
+                log('❌ No <g> element found!', 'fail');
+                return;
+            }
+
+            const originalOpacity = window.getComputedStyle(firstG).opacity;
+            firstG.style.opacity = '0.2';
+            log(`✓ Changed first <g> opacity from ${originalOpacity} to 0.2`, 'pass');
+            log('Look at the SVG - did you see a visible change?', 'info');
+
+            setTimeout(() => {
+                firstG.style.opacity = '';
+                log('✓ Restored original opacity', 'pass');
+            }, 2000);
+        };
+
+        const runStep4TestAnimation = () => {
+            log('', 'info');
+            log('=== STEP 4: INJECT TEST ANIMATION ===', 'info');
+            const svg = document.querySelector('svg');
+            if (!svg) {
+                log('❌ No SVG found!', 'fail');
+                return;
+            }
+
+            // Remove existing test animation
+            const existing = svg.querySelector('#diagnostic-test-animation');
+            if (existing) existing.remove();
+
+            const testStyle = document.createElement('style');
+            testStyle.id = 'diagnostic-test-animation';
+            testStyle.textContent = `
+                svg g rect {
+                    animation: debugblink 1s infinite alternate !important;
+                }
+                @keyframes debugblink {
+                    from { opacity: 1; }
+                    to { opacity: 0.3; }
+                }
+            `;
+            svg.appendChild(testStyle);
+            log('✓ Test animation injected!', 'pass');
+            log('All <rect> elements should now be blinking.', 'pass');
+            log('If you see blinking, animations CAN work!', 'pass');
+        };
+
+        const removeTestAnimation = () => {
+            const svg = document.querySelector('svg');
+            if (!svg) return;
+            const testStyle = svg.querySelector('#diagnostic-test-animation');
+            if (testStyle) {
+                testStyle.remove();
+                log('✓ Test animation removed', 'info');
+            }
+        };
+
+        const testStaticHTML = async () => {
+            clear();
+            log('=== LOADING STATIC HTML WITH ANIMATED SVG ===', 'info');
+            log('Fetching job_portal_animated.html...', 'info');
+
+            try {
+                const response = await fetch('/job_portal_animated.html');
+                const html = await response.text();
+
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const svg = doc.querySelector('svg');
+
+                if (!svg) {
+                    log('❌ No SVG found in HTML!', 'fail');
+                    return;
+                }
+
+                log('✓ SVG found in HTML', 'pass');
+
+                const preview = document.getElementById('svg-preview');
+                preview.innerHTML = '';
+                preview.appendChild(svg.cloneNode(true));
+
+                log('✓ SVG rendered in preview below', 'pass');
+                log('Check if you see animations in the preview', 'info');
+
+                setTimeout(() => runStep2Diagnostics(), 500);
+            } catch (err) {
+                log(`❌ Error: ${err.message}`, 'fail');
+            }
+        };
+
+        const fetchAndTestAPI = async () => {
+            clear();
+            log('=== FETCHING SVG FROM API ===', 'info');
+
+            // First, let's see if there are any images
+            try {
+                const sessionsResp = await fetch('/api/sessions');
+                if (!sessionsResp.ok) {
+                    log('❌ Could not fetch sessions', 'fail');
+                    return;
+                }
+
+                const sessions = await sessionsResp.json();
+                log(`✓ Found ${sessions.length} sessions`, 'pass');
+
+                if (sessions.length === 0) {
+                    log('❌ No sessions found. Create a diagram first!', 'fail');
+                    return;
+                }
+
+                const latestSession = sessions[sessions.length - 1];
+                log(`✓ Using session: ${latestSession.id}`, 'info');
+
+                const imagesResp = await fetch(`/api/sessions/${latestSession.id}/images`);
+                if (!imagesResp.ok) {
+                    log('❌ Could not fetch images', 'fail');
+                    return;
+                }
+
+                const images = await imagesResp.json();
+                log(`✓ Found ${images.length} images`, 'pass');
+
+                if (images.length === 0) {
+                    log('❌ No images found. Generate a diagram first!', 'fail');
+                    return;
+                }
+
+                const latestImage = images[images.length - 1];
+                log(`✓ Using image: ${latestImage.id}`, 'info');
+
+                // Fetch animated SVG
+                log('Fetching animated SVG from API...', 'info');
+                const svgResp = await fetch(`/api/diagram/render?format=svg&animated=true&image_id=${latestImage.id}`);
+                if (!svgResp.ok) {
+                    log(`❌ API error: ${svgResp.status} ${svgResp.statusText}`, 'fail');
+                    return;
+                }
+
+                const data = await svgResp.json();
+                log('✓ Received SVG from API', 'pass');
+
+                const preview = document.getElementById('svg-preview');
+                preview.innerHTML = data.svg;
+
+                log('✓ SVG rendered in preview below', 'pass');
+                log('Check if you see animations!', 'info');
+
+                setTimeout(() => runStep2Diagnostics(), 500);
+
+            } catch (err) {
+                log(`❌ Error: ${err.message}`, 'fail');
+            }
+        };
+
+        const getDiagnosticScript = () => {
+            return `// Run this in the main UI console (http://localhost:5173)
+console.clear();
+console.log('=== SVG ANIMATION DIAGNOSTIC ===');
+const svgs = document.querySelectorAll('svg');
+console.log('SVG elements:', svgs.length);
+if (svgs.length > 0) {
+    const svg = svgs[0];
+    const styles = svg.querySelectorAll('style');
+    console.log('Style tags in SVG:', styles.length);
+    if (styles.length > 0) {
+        const content = styles[0].textContent;
+        console.log('Has @keyframes:', content.includes('@keyframes'));
+        console.log('Has animation rules:', content.includes('animation:'));
+    }
+    const testSel = ['#title_text', '#node_browser_rect'];
+    testSel.forEach(sel => {
+        const el = svg.querySelector(sel);
+        if (el) {
+            const computed = window.getComputedStyle(el);
+            console.log(sel, '→ animation:', computed.animationName, computed.animationDuration);
+        } else {
+            console.log(sel, '→ NOT FOUND');
+        }
+    });
+}`;
+        };
+
+        const copyDiagnosticScript = () => {
+            const script = getDiagnosticScript();
+            navigator.clipboard.writeText(script).then(() => {
+                log('✓ Diagnostic script copied to clipboard!', 'pass');
+                log('Paste it into the browser console at http://localhost:5173', 'info');
+            });
+        };
+
+        // Auto-load message
+        window.addEventListener('load', () => {
+            log('🔬 Animation Investigation Tool Loaded', 'info');
+            log('Follow the steps above to systematically debug SVG animations', 'info');
+            log('', 'info');
+        });
+    </script>
+</body>
+
+</html>

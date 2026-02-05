@@ -1,0 +1,10 @@
+version: "3.9"
+services:
+  mermaid-renderer:
+    build:
+      context: ./docker/mermaid
+    image: archviz-mermaid-renderer:latest
+  structurizr-renderer:
+    build:
+      context: ./docker/structurizr
+    image: archviz-structurizr-renderer:latest

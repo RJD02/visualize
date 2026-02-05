@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG Animation Test</title>
+    <style>
+        body {
+            background: #1e293b;
+            color: white;
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+
+        .svg-container {
+            background: #0f172a;
+            border: 1px solid #475569;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        h2 {
+            margin-top: 40px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>SVG Animation Debug Test</h1>
+    <p>If animations are working, you should see elements blinking (debug mode) and nodes pulsing.</p>
+
+    <h2>Test 1: Simple Inline SVG with Animation CSS</h2>
+    <div class="svg-container">
+        <svg xmlns="http://www.w3.org/2000/svg" width="400" height="200" viewBox="0 0 400 200">
+            <style>
+                @keyframes debugBlink {
+                    0% {
+                        opacity: 0.2;
+                    }
+
+                    100% {
+                        opacity: 1;
+                    }
+                }
+
+                svg g {
+                    animation: debugBlink 1s infinite alternate;
+                }
+
+                @keyframes animNodePulse {
+                    0% {
+                        opacity: 0.65;
+                        transform: scale(1);
+                    }
+
+                    50% {
+                        opacity: 1;
+                        transform: scale(1.03);
+                    }
+
+                    100% {
+                        opacity: 1;
+                        transform: scale(1);
+                    }
+                }
+
+                #node1 {
+                    animation: animNodePulse 0.80s ease-in-out 0.00s infinite both;
+                    transform-origin: center;
+                    transform-box: fill-box;
+                }
+
+                #node2 {
+                    animation: animNodePulse 0.80s ease-in-out 0.40s infinite both;
+                    transform-origin: center;
+                    transform-box: fill-box;
+                }
+            </style>
+            <g id="node1">
+                <rect x="20" y="50" width="120" height="60" fill="#0f172a" stroke="#94a3b8" stroke-width="2" />
+                <text x="40" y="85" fill="#f8fafc" font-size="12">Node 1</text>
+            </g>
+            <g id="node2">
+                <rect x="200" y="50" width="120" height="60" fill="#0f172a" stroke="#94a3b8" stroke-width="2" />
+                <text x="220" y="85" fill="#f8fafc" font-size="12">Node 2</text>
+            </g>
+            <line x1="140" y1="80" x2="200" y2="80" stroke="#60a5fa" stroke-width="2" />
+        </svg>
+    </div>
+
+    <h2>Test 2: SVG injected via innerHTML (like React dangerouslySetInnerHTML)</h2>
+    <div class="svg-container" id="injected-svg-container"></div>
+
+    <script>
+        const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200" viewBox="0 0 400 200">
+            <style>
+                @keyframes debugBlink {
+                    0% { opacity: 0.2; }
+                    100% { opacity: 1; }
+                }
+                svg g { animation: debugBlink 1s infinite alternate; }
+                
+                @keyframes animNodePulse {
+                    0% { opacity: 0.65; transform: scale(1); }
+                    50% { opacity: 1; transform: scale(1.03); }
+                    100% { opacity: 1; transform: scale(1); }
+                }
+                #injected-node1 { animation: animNodePulse 0.80s ease-in-out 0.00s infinite both; transform-origin: center; transform-box: fill-box; }
+                #injected-node2 { animation: animNodePulse 0.80s ease-in-out 0.40s infinite both; transform-origin: center; transform-box: fill-box; }
+            </style>
+            <g id="injected-node1">
+                <rect x="20" y="50" width="120" height="60" fill="#334155" stroke="#94a3b8" stroke-width="2"/>
+                <text x="40" y="85" fill="#f8fafc" font-size="12">Injected 1</text>
+            </g>
+            <g id="injected-node2">
+                <rect x="200" y="50" width="120" height="60" fill="#334155" stroke="#94a3b8" stroke-width="2"/>
+                <text x="220" y="85" fill="#f8fafc" font-size="12">Injected 2</text>
+            </g>
+            <line x1="140" y1="80" x2="200" y2="80" stroke="#60a5fa" stroke-width="2"/>
+        </svg>`;
+
+        document.getElementById('injected-svg-container').innerHTML = svgContent;
+    </script>
+
+    <h2>Test 3: Runtime DOM manipulation test</h2>
+    <div class="svg-container" id="dom-test-container">
+        <svg xmlns="http://www.w3.org/2000/svg" width="400" height="100" viewBox="0 0 400 100" id="dom-test-svg">
+            <g id="dom-test-node">
+                <rect x="20" y="20" width="120" height="60" fill="#475569" stroke="#94a3b8" stroke-width="2" />
+                <text x="40" y="55" fill="#f8fafc" font-size="12">DOM Test</text>
+            </g>
+        </svg>
+        <br>
+        <button onclick="testDomManipulation()">Click to test: set opacity to 0.2</button>
+    </div>
+
+    <script>
+        function testDomManipulation() {
+            const g = document.querySelector('#dom-test-node');
+            if (g) {
+                g.style.opacity = '0.2';
+                alert('Opacity set to 0.2. If you see the node become faint, DOM manipulation works.');
+            } else {
+                alert('Could not find #dom-test-node element');
+            }
+        }
+    </script>
+
+    <h2>Debugging Notes</h2>
+    <ul>
+        <li>If Test 1 animates but Test 2 doesn't: innerHTML injection has issues</li>
+        <li>If neither animate: CSS animation support may be disabled or browser issue</li>
+        <li>If Test 3 DOM manipulation doesn't work: SVG may not be inline</li>
+        <li>Check browser DevTools for any CSS errors</li>
+    </ul>
+</body>
+
+</html>

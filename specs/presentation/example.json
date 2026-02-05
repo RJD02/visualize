@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "targets": [
+    {
+      "selector": ".node",
+      "styles": { "fill": "#E5E7EB" }
+    },
+    {
+      "selector": "#node-api",
+      "styles": { "fill": "#6366F1" },
+      "animation": {
+        "type": "pulse",
+        "duration": "1.5s",
+        "easing": "ease-in-out",
+        "repeat": "infinite"
+      }
+    },
+    {
+      "selector": ".edge-request",
+      "animation": {
+        "type": "draw",
+        "duration": "800ms",
+        "delay": "200ms"
+      }
+    }
+  ]
+}
