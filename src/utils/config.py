@@ -24,8 +24,6 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("DATABASE_URL"),
     )
     plantuml_server_url: str = "https://www.plantuml.com/plantuml/png/"
-    mermaid_renderer_image: str = "archviz-mermaid-renderer:latest"
-    structurizr_renderer_image: str = "archviz-structurizr-renderer:latest"
     output_dir: str = "outputs"
     default_diagram_type: str = "sequence"
     enable_ir: bool = True  # Enable IR pipeline by default

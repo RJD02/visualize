@@ -24,13 +24,6 @@ from src.tools.sdxl_renderer import run_sdxl, run_sdxl_edit
 from src.tools.text_extractor import extract_text
 from src.mcp.registry import MCPRegistry, MCPTool
 from src.utils.config import settings
-from src.renderers.renderer_ir import RendererIR
-from src.renderers.router import render_ir
-from src.renderers.translator import ir_to_mermaid, ir_to_structurizr_dsl, ir_to_plantuml
-from src.renderers.mermaid_renderer import render_mermaid_svg
-from src.renderers.structurizr_renderer import render_structurizr_svg
-from src.renderers.plantuml_renderer import render_plantuml_svg_text
-from src.renderers.renderer_ir import IRNode, IREdge, IRGroup
 
 
 def _parse_uuid(value: str | UUID) -> UUID:
@@ -140,76 +133,6 @@ def tool_explain_architecture(context: Dict[str, Any], architecture_plan: Dict[s
 def tool_ingest_github_repo(context: Dict[str, Any], repo_url: str) -> Dict[str, Any]:
     return ingest_github_repo(repo_url)
 
-
-def _renderer_ir_from_plan(plan: ArchitecturePlan, diagram_type: str) -> RendererIR:
-    nodes = []
-    edges = []
-    groups = []
-    zone_map = {
-        "clients": ("person", plan.zones.clients),
-        "edge": ("service", plan.zones.edge),
-        "core_services": ("component", plan.zones.core_services),
-        "external_services": ("external", plan.zones.external_services),
-        "data_stores": ("database", plan.zones.data_stores),
-    }
-    for zone, (kind, items) in zone_map.items():
-        if not items:
-            continue
-        group_id = zone
-        groups.append(IRGroup(id=group_id, label=zone.replace("_", " "), members=list(items)))
-        for item in items:
-            nodes.append(IRNode(id=item, kind=kind, label=item, group=group_id))
-    for rel in plan.relationships:
-        edges.append(IREdge(**{"from": rel.from_, "to": rel.to, "type": rel.type, "label": rel.description}))
-    diagram_kind = "architecture"
-    if diagram_type in {"sequence", "runtime"}:
-        diagram_kind = "sequence"
-    elif diagram_type in {"system_context", "container", "component"}:
-        diagram_kind = "architecture"
-    return RendererIR(
-        diagram_kind=diagram_kind,
-        layout=plan.visual_hints.layout,
-        title=plan.system_name,
-        nodes=nodes,
-        edges=edges,
-        groups=groups,
-    )
-
-
-def tool_build_renderer_ir(
-    context: Dict[str, Any], architecture_plan: Dict[str, Any], diagram_type: str
-) -> Dict[str, Any]:
-    if not architecture_plan:
-        raise ValueError("architecture_plan is required")
-    plan = ArchitecturePlan.parse_obj(architecture_plan)
-    ir = _renderer_ir_from_plan(plan, diagram_type)
-    return {"ir": ir.to_dict()}
-
-
-def tool_render_ir_router(
-    context: Dict[str, Any], ir: Dict[str, Any], renderer_override: Optional[str] = None
-) -> Dict[str, Any]:
-    renderer_ir = RendererIR.parse_obj(ir)
-    svg_text, choice = render_ir(renderer_ir, override=renderer_override)
-    return {"svg": svg_text, "renderer": choice.renderer, "reason": choice.reason}
-
-
-def tool_mermaid_renderer(context: Dict[str, Any], ir: Dict[str, Any]) -> Dict[str, Any]:
-    renderer_ir = RendererIR.parse_obj(ir)
-    svg_text = render_mermaid_svg(ir_to_mermaid(renderer_ir))
-    return {"svg": svg_text}
-
-
-def tool_structurizr_renderer(context: Dict[str, Any], ir: Dict[str, Any]) -> Dict[str, Any]:
-    renderer_ir = RendererIR.parse_obj(ir)
-    svg_text = render_structurizr_svg(ir_to_structurizr_dsl(renderer_ir))
-    return {"svg": svg_text}
-
-
-def tool_plantuml_renderer(context: Dict[str, Any], ir: Dict[str, Any]) -> Dict[str, Any]:
-    renderer_ir = RendererIR.parse_obj(ir)
-    svg_text = render_plantuml_svg_text(ir_to_plantuml(renderer_ir))
-    return {"svg": svg_text}
 
 
 def tool_edit_diagram_via_semantic_understanding(
@@ -381,56 +304,6 @@ def register_mcp_tools(registry: MCPRegistry) -> None:
             output_schema={"type": "object", "properties": {"ir_entries": {"type": "array"}}},
             side_effects="writes diagram files",
             handler=tool_generate_multiple_diagrams,
-        )
-    )
-    registry.register(
-        MCPTool(
-            name="build_renderer_ir",
-            description="Build renderer-agnostic IR from an architecture plan.",
-            input_schema={"type": "object", "properties": {"architecture_plan": {"type": "object"}, "diagram_type": {"type": "string"}}, "required": ["architecture_plan", "diagram_type"]},
-            output_schema={"type": "object", "properties": {"ir": {"type": "object"}}},
-            side_effects="none",
-            handler=tool_build_renderer_ir,
-        )
-    )
-    registry.register(
-        MCPTool(
-            name="render_ir_router",
-            description="Render renderer-agnostic IR using the renderer router.",
-            input_schema={"type": "object", "properties": {"ir": {"type": "object"}, "renderer_override": {"type": "string"}} , "required": ["ir"]},
-            output_schema={"type": "object", "properties": {"svg": {"type": "string"}, "renderer": {"type": "string"}, "reason": {"type": "string"}}},
-            side_effects="none",
-            handler=tool_render_ir_router,
-        )
-    )
-    registry.register(
-        MCPTool(
-            name="mermaid_renderer",
-            description="Render renderer-agnostic IR using Mermaid (dockerized).",
-            input_schema={"type": "object", "properties": {"ir": {"type": "object"}}, "required": ["ir"]},
-            output_schema={"type": "object", "properties": {"svg": {"type": "string"}}},
-            side_effects="none",
-            handler=tool_mermaid_renderer,
-        )
-    )
-    registry.register(
-        MCPTool(
-            name="structurizr_renderer",
-            description="Render renderer-agnostic IR using Structurizr (dockerized).",
-            input_schema={"type": "object", "properties": {"ir": {"type": "object"}}, "required": ["ir"]},
-            output_schema={"type": "object", "properties": {"svg": {"type": "string"}}},
-            side_effects="none",
-            handler=tool_structurizr_renderer,
-        )
-    )
-    registry.register(
-        MCPTool(
-            name="plantuml_renderer",
-            description="Render renderer-agnostic IR using PlantUML (server).",
-            input_schema={"type": "object", "properties": {"ir": {"type": "object"}}, "required": ["ir"]},
-            output_schema={"type": "object", "properties": {"svg": {"type": "string"}}},
-            side_effects="none",
-            handler=tool_plantuml_renderer,
         )
     )
     registry.register(

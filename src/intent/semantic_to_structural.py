@@ -5,7 +5,7 @@ import re
 from typing import List, Tuple
 
 from src.models.architecture_plan import ArchitecturePlan
-from src.renderers.renderer_ir import RendererIR, IRNode, IREdge, IRGroup
+from src.ir.structural_ir import StructuralIR, StructuralNode, StructuralEdge, StructuralGroup
 from src.intent.semantic_ir_architecture import ArchitectureSemanticIR, ArchitectureActor, ArchitectureElement, ArchitectureRelationship
 from src.intent.semantic_ir_story import StorySemanticIR, StoryCharacter, StoryEvent, StoryLocation, StoryTransition
 from src.intent.semantic_ir_sequence import SequenceSemanticIR, SequenceParticipant, SequenceStep
@@ -71,10 +71,10 @@ def architecture_ir_from_plan(plan: ArchitecturePlan, diagram_type: str) -> Arch
     )
 
 
-def architecture_to_structural(ir: ArchitectureSemanticIR) -> RendererIR:
-    nodes: List[IRNode] = []
-    edges: List[IREdge] = []
-    groups: List[IRGroup] = []
+def architecture_to_structural(ir: ArchitectureSemanticIR) -> StructuralIR:
+    nodes: List[StructuralNode] = []
+    edges: List[StructuralEdge] = []
+    groups: List[StructuralGroup] = []
 
     group_map = {
         "actors": ("person", ir.actors),
@@ -90,14 +90,14 @@ def architecture_to_structural(ir: ArchitectureSemanticIR) -> RendererIR:
         for item in items:
             label = item.label
             node_id = item.id
-            nodes.append(IRNode(id=node_id, kind=kind, label=label, group=group_id))
+            nodes.append(StructuralNode(id=node_id, kind=kind, label=label, group=group_id))
             members.append(node_id)
-        groups.append(IRGroup(id=group_id, label=group_id.replace("_", " "), members=members))
+        groups.append(StructuralGroup(id=group_id, label=group_id.replace("_", " "), members=members))
 
     for rel in ir.relationships:
-        edges.append(IREdge(**{"from": rel.from_, "to": rel.to, "type": rel.type, "label": rel.description}))
+        edges.append(StructuralEdge(**{"from": rel.from_, "to": rel.to, "type": rel.type, "label": rel.description}))
 
-    return RendererIR(
+    return StructuralIR(
         diagram_kind="architecture",
         layout="left-to-right",
         title=None,
@@ -139,10 +139,10 @@ def story_ir_from_text(text: str) -> StorySemanticIR:
     )
 
 
-def story_to_structural(ir: StorySemanticIR) -> RendererIR:
-    nodes = [IRNode(id=e.id, kind="event", label=e.summary) for e in ir.events]
-    edges = [IREdge(**{"from": t.from_, "to": t.to, "type": "transition", "label": t.label}) for t in ir.transitions]
-    return RendererIR(
+def story_to_structural(ir: StorySemanticIR) -> StructuralIR:
+    nodes = [StructuralNode(id=e.id, kind="event", label=e.summary) for e in ir.events]
+    edges = [StructuralEdge(**{"from": t.from_, "to": t.to, "type": "transition", "label": t.label}) for t in ir.transitions]
+    return StructuralIR(
         diagram_kind="flow",
         layout="top-down",
         title=ir.title,
@@ -180,10 +180,10 @@ def sequence_ir_from_text(text: str) -> SequenceSemanticIR:
     return SequenceSemanticIR(participants=participants, steps=steps)
 
 
-def sequence_to_structural(ir: SequenceSemanticIR) -> RendererIR:
-    nodes = [IRNode(id=p.id, kind="participant", label=p.label) for p in ir.participants]
-    edges = [IREdge(**{"from": s.from_, "to": s.to, "type": "message", "label": s.message}) for s in ir.steps]
-    return RendererIR(
+def sequence_to_structural(ir: SequenceSemanticIR) -> StructuralIR:
+    nodes = [StructuralNode(id=p.id, kind="participant", label=p.label) for p in ir.participants]
+    edges = [StructuralEdge(**{"from": s.from_, "to": s.to, "type": "message", "label": s.message, "order": s.order}) for s in ir.steps]
+    return StructuralIR(
         diagram_kind="sequence",
         layout="left-to-right",
         title=None,

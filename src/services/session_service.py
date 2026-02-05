@@ -30,7 +30,7 @@ from src.intent.semantic_to_structural import (
     sequence_ir_from_text,
     sequence_to_structural,
 )
-from src.renderers.router import render_ir, choose_renderer
+from src.ir.structural_to_plantuml import structural_ir_to_plantuml
 from src.ir.plan_to_semantic import plan_to_semantic_ir
 from src.ir.plantuml_adapter import ir_to_plantuml
 from src.renderer import render_plantuml, render_plantuml_svg
@@ -210,7 +210,9 @@ def ingest_input(
         if intent_result.primary == "story":
             story_ir = story_ir_from_text(content)
             structural_ir = story_to_structural(story_ir)
-            svg_text, choice = render_ir(structural_ir)
+            plantuml_text = structural_ir_to_plantuml(structural_ir)
+            svg_path = render_plantuml_svg(plantuml_text, f"{session.id}_story_1")
+            svg_text = Path(svg_path).read_text(encoding="utf-8")
             svg_text = _ensure_ir_metadata(svg_text, {
                 "diagram_type": "story",
                 "layout": structural_ir.layout,
@@ -225,7 +227,7 @@ def ingest_input(
                 svg_text=svg_text,
                 reason="story intent",
                 parent_ir_id=None,
-                ir_json={"intent": "story", "semantic_ir": story_ir.to_dict(), "structural_ir": structural_ir.to_dict(), "renderer": choice.renderer},
+                ir_json={"intent": "story", "semantic_ir": story_ir.to_dict(), "structural_ir": structural_ir.to_dict(), "renderer": "plantuml"},
             )
             svg_file = render_ir_svg(svg_text, f"{session.id}_story_1")
             image = _create_image(
@@ -252,7 +254,9 @@ def ingest_input(
         elif intent_result.primary == "sequence":
             seq_ir = sequence_ir_from_text(content)
             structural_ir = sequence_to_structural(seq_ir)
-            svg_text, choice = render_ir(structural_ir)
+            plantuml_text = structural_ir_to_plantuml(structural_ir)
+            svg_path = render_plantuml_svg(plantuml_text, f"{session.id}_sequence_1")
+            svg_text = Path(svg_path).read_text(encoding="utf-8")
             svg_text = _ensure_ir_metadata(svg_text, {
                 "diagram_type": "sequence",
                 "layout": structural_ir.layout,
@@ -267,7 +271,7 @@ def ingest_input(
                 svg_text=svg_text,
                 reason="sequence intent",
                 parent_ir_id=None,
-                ir_json={"intent": "sequence", "semantic_ir": seq_ir.to_dict(), "structural_ir": structural_ir.to_dict(), "renderer": choice.renderer},
+                ir_json={"intent": "sequence", "semantic_ir": seq_ir.to_dict(), "structural_ir": structural_ir.to_dict(), "renderer": "plantuml"},
             )
             svg_file = render_ir_svg(svg_text, f"{session.id}_sequence_1")
             image = _create_image(
@@ -299,7 +303,9 @@ def ingest_input(
             for idx, diagram_type in enumerate(diagram_types):
                 arch_ir = architecture_ir_from_plan(plan_model, diagram_type=diagram_type)
                 structural_ir = architecture_to_structural(arch_ir)
-                svg_text, choice = render_ir(structural_ir)
+                plantuml_text = structural_ir_to_plantuml(structural_ir)
+                svg_path = render_plantuml_svg(plantuml_text, f"{session.id}_{diagram_type}_{idx + 1}")
+                svg_text = Path(svg_path).read_text(encoding="utf-8")
                 svg_text = _ensure_ir_metadata(svg_text, {
                     "diagram_type": diagram_type,
                     "layout": structural_ir.layout,
@@ -314,7 +320,7 @@ def ingest_input(
                     svg_text=svg_text,
                     reason="architecture intent",
                     parent_ir_id=None,
-                    ir_json={"intent": diagram_type, "semantic_ir": arch_ir.to_dict(), "structural_ir": structural_ir.to_dict(), "renderer": choice.renderer},
+                    ir_json={"intent": diagram_type, "semantic_ir": arch_ir.to_dict(), "structural_ir": structural_ir.to_dict(), "renderer": "plantuml"},
                 )
                 svg_file = render_ir_svg(svg_text, f"{session.id}_{diagram_type}_{idx + 1}")
                 image = _create_image(

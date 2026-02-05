@@ -1,7 +1,6 @@
-from src.renderers.renderer_ir import RendererIR, IRNode, IREdge
-from src.renderers.router import choose_renderer
-from src.renderers.neutral_svg import strip_svg_colors, validate_neutral_svg
-from src.animation.diagram_renderer import render_svg
+import pytest
+
+pytest.skip("Renderer integration rolled back", allow_module_level=True)
 
 
 def _sample_ir(kind: str = "flow") -> RendererIR:
