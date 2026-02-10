@@ -1,41 +1,53 @@
 """REST API server."""
 from __future__ import annotations
 
+import base64
+import mimetypes
 from typing import Generator, List, Optional
+from uuid import UUID
 
-from fastapi import Depends, FastAPI, File, Form, UploadFile, Query
-from fastapi.responses import JSONResponse
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from sqlalchemy.orm import Session as DbSession
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from src.db import Base, SessionLocal, engine
 from src.schemas import (
     ArchitecturePlanResponse,
     DiagramFileResponse,
-    ImageResponse,
     ImageIRResponse,
+    ImageResponse,
+    MCPDiscoverResponse,
+    MCPExecuteRequest,
+    MCPExecuteResponse,
     MessageResponse,
+    PlanSummaryResponse,
+    PlanHistoryResponse,
+    PlanExecutionResponse,
     SessionCreateResponse,
     SessionDetailResponse,
+    StylingAuditResponse,
 )
-from src.db_models import DiagramIR, Image
+from src.db_models import DiagramIR, Image, Session as SessionRecord, StylingAudit
 from src.mcp.registry import mcp_registry
 from src.mcp.tools import register_mcp_tools
 from src.services.session_service import (
     create_session,
     get_latest_plan,
+    get_plan_with_history,
     get_session,
     handle_message,
     ingest_input,
     list_diagrams,
     list_images,
     list_messages,
+    list_plan_records,
     save_edited_ir,
 )
+from src.services.styling_audit_service import get_styling_audit, list_styling_audits, list_audits_by_plan
 from src.animation_resolver import inject_animation, validate_presentation_spec
 from src.animation.diagram_renderer import render_svg
 from src.intent.semantic_aesthetic_ir import SemanticAestheticIR
@@ -44,8 +56,6 @@ import src.animation.svg_parser as svg_parser_module
 import src.animation.animation_plan_generator as plan_module
 import src.animation.css_injector as css_module
 import src.animation.diagram_renderer as renderer_module
-from src.db_models import DiagramIR, Image
-from fastapi import HTTPException
 import json
 
 app = FastAPI(title="Architecture Visualization API")
@@ -79,6 +89,45 @@ def get_db() -> Generator[DbSession, None, None]:
         db.close()
 
 
+def _serialize_styling_audit(audit: StylingAudit) -> StylingAuditResponse:
+    return StylingAuditResponse(
+        id=audit.id,
+        session_id=audit.session_id,
+        plan_id=audit.plan_id,
+        diagram_id=audit.diagram_id,
+        diagram_type=audit.diagram_type,
+        mode=audit.mode,
+        timestamp=audit.timestamp,
+        user_prompt=audit.user_prompt,
+        llm_format=audit.llm_format,
+        llm_diagram=audit.llm_diagram,
+        sanitized_diagram=audit.sanitized_diagram,
+        extracted_intent=audit.extracted_intent,
+        styling_plan=audit.styling_plan,
+        execution_steps=list(audit.execution_steps or []),
+        agent_reasoning=audit.agent_reasoning,
+        renderer_input_before=audit.renderer_input_before,
+        renderer_input_after=audit.renderer_input_after,
+        svg_before=audit.svg_before,
+        svg_after=audit.svg_after,
+        validation_warnings=list(audit.validation_warnings or []),
+        blocked_tokens=list(audit.blocked_tokens or []),
+    )
+
+
+def _serialize_plan_execution(execution) -> PlanExecutionResponse:
+    return PlanExecutionResponse(
+        id=execution.id,
+        step_index=execution.step_index,
+        tool_name=execution.tool_name,
+        arguments=execution.arguments,
+        output=execution.output,
+        audit_id=execution.audit_id,
+        duration_ms=execution.duration_ms,
+        created_at=execution.created_at,
+    )
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     Base.metadata.create_all(bind=engine)
@@ -103,6 +152,20 @@ def _ensure_message_columns() -> None:
             existing_images = {row[1] for row in rows}
             if "ir_id" not in existing_images:
                 conn.execute(text("ALTER TABLE images ADD COLUMN ir_id UUID"))
+            rows = conn.execute(text("PRAGMA table_info(styling_audits)"))
+            existing_audits = {row[1] for row in rows}
+            if "plan_id" not in existing_audits:
+                conn.execute(text("ALTER TABLE styling_audits ADD COLUMN plan_id UUID"))
+            if "llm_format" not in existing_audits:
+                conn.execute(text("ALTER TABLE styling_audits ADD COLUMN llm_format VARCHAR(16)"))
+            if "llm_diagram" not in existing_audits:
+                conn.execute(text("ALTER TABLE styling_audits ADD COLUMN llm_diagram TEXT"))
+            if "sanitized_diagram" not in existing_audits:
+                conn.execute(text("ALTER TABLE styling_audits ADD COLUMN sanitized_diagram TEXT"))
+            if "validation_warnings" not in existing_audits:
+                conn.execute(text("ALTER TABLE styling_audits ADD COLUMN validation_warnings JSON"))
+            if "blocked_tokens" not in existing_audits:
+                conn.execute(text("ALTER TABLE styling_audits ADD COLUMN blocked_tokens JSON"))
     else:
         statements = [
             "ALTER TABLE messages ADD COLUMN IF NOT EXISTS message_type VARCHAR(16) DEFAULT 'text'",
@@ -110,6 +173,12 @@ def _ensure_message_columns() -> None:
             "ALTER TABLE messages ADD COLUMN IF NOT EXISTS diagram_type VARCHAR(64)",
             "ALTER TABLE messages ADD COLUMN IF NOT EXISTS ir_id UUID",
             "ALTER TABLE images ADD COLUMN IF NOT EXISTS ir_id UUID",
+            "ALTER TABLE styling_audits ADD COLUMN IF NOT EXISTS plan_id UUID",
+            "ALTER TABLE styling_audits ADD COLUMN IF NOT EXISTS llm_format VARCHAR(16)",
+            "ALTER TABLE styling_audits ADD COLUMN IF NOT EXISTS llm_diagram TEXT",
+            "ALTER TABLE styling_audits ADD COLUMN IF NOT EXISTS sanitized_diagram TEXT",
+            "ALTER TABLE styling_audits ADD COLUMN IF NOT EXISTS validation_warnings JSON",
+            "ALTER TABLE styling_audits ADD COLUMN IF NOT EXISTS blocked_tokens JSON",
         ]
         with engine.begin() as conn:
             for stmt in statements:
@@ -145,7 +214,10 @@ async def ingest_api(
                 f.write(content)
             temp_paths.append(path)
     try:
-        result = ingest_input(db, session, temp_paths, text, github_url=github_url)
+        # When ingest is triggered via the API (file upload / GitHub URL), do not
+        # auto-create assistant images or messages. Images are created only when
+        # the user explicitly requests generation via chat to avoid preloading UI.
+        result = ingest_input(db, session, temp_paths, text, github_url=github_url, generate_images=False)
         return result
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
@@ -175,13 +247,25 @@ def session_detail(session_id: str, db: DbSession = Depends(get_db)):
     if not session:
         return JSONResponse(status_code=404, content={"error": "Session not found"})
     plan = get_latest_plan(db, session.id)
-    return SessionDetailResponse(
-        session_id=session.id,
-        title=session.title,
-        source_repo=session.source_repo,
-        source_commit=session.source_commit,
-        architecture_plan=ArchitecturePlanResponse(data=plan.data, created_at=plan.created_at) if plan else None,
-        images=[
+    plan_records = list_plan_records(db, session.id)
+    # Only show preloaded diagrams after the user has sent a message.
+    # This prevents auto-generated PlantUML diagrams from appearing when a
+    # session is first created by the system/agents.
+    recent_messages = list_messages(db, session.id)
+    show_diagrams = any(m.role == "user" for m in recent_messages)
+
+    image_records = list_images(db, session.id) if show_diagrams else []
+    ir_map: dict[str, DiagramIR] = {}
+    if image_records:
+        ir_ids = list({img.ir_id for img in image_records if getattr(img, "ir_id", None)})
+        if ir_ids:
+            ir_rows = db.execute(select(DiagramIR).where(DiagramIR.id.in_(ir_ids))).scalars()
+            ir_map = {ir.id: ir for ir in ir_rows}
+
+    images_payload: list[ImageResponse] = []
+    for img in image_records:
+        ir_record = ir_map.get(img.ir_id)
+        images_payload.append(
             ImageResponse(
                 id=img.id,
                 version=img.version,
@@ -189,16 +273,27 @@ def session_detail(session_id: str, db: DbSession = Depends(get_db)):
                 prompt=img.prompt,
                 reason=img.reason,
                 created_at=img.created_at,
+                diagram_type=ir_record.diagram_type if ir_record else None,
+                ir_id=getattr(img, "ir_id", None),
+                ir_svg_text=ir_record.svg_text if ir_record else None,
+                ir_metadata=ir_record.ir_json if ir_record else None,
             )
-            for img in list_images(db, session.id)
-        ],
+        )
+
+    return SessionDetailResponse(
+        session_id=session.id,
+        title=session.title,
+        source_repo=session.source_repo,
+        source_commit=session.source_commit,
+        architecture_plan=ArchitecturePlanResponse(data=plan.data, created_at=plan.created_at) if plan else None,
+        images=images_payload,
         diagrams=[
             DiagramFileResponse(
                 diagram_type=d.diagram_type,
                 file_path=d.file_path,
                 created_at=d.created_at,
             )
-            for d in list_diagrams(db, session.id)
+            for d in (list_diagrams(db, session.id) if show_diagrams else [])
         ],
         messages=[
             MessageResponse(
@@ -214,6 +309,37 @@ def session_detail(session_id: str, db: DbSession = Depends(get_db)):
             )
             for m in list_messages(db, session.id)
         ],
+        plans=[
+            PlanSummaryResponse(
+                id=p.id,
+                session_id=p.session_id,
+                intent=p.intent,
+                plan_json=p.plan_json,
+                metadata=p.metadata_json,
+                executed=p.executed,
+                created_at=p.created_at,
+            )
+            for p in plan_records
+        ],
+    )
+
+
+@app.get("/api/plans/{plan_id}", response_model=PlanHistoryResponse)
+def plan_history(plan_id: str, db: DbSession = Depends(get_db)):
+    plan, executions = get_plan_with_history(db, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    audits = list_audits_by_plan(db, plan.id)
+    return PlanHistoryResponse(
+        id=plan.id,
+        session_id=plan.session_id,
+        intent=plan.intent,
+        plan_json=plan.plan_json,
+        metadata=plan.metadata_json,
+        executed=plan.executed,
+        created_at=plan.created_at,
+        executions=[_serialize_plan_execution(e) for e in executions],
+        audits=[_serialize_styling_audit(a) for a in audits],
     )
 
 
@@ -260,6 +386,28 @@ def save_image_ir(image_id: str, payload: dict, db: DbSession = Depends(get_db))
         created_at=created_image.created_at,
     )
 
+
+@app.get("/api/diagrams/{diagram_id}/styling/audit", response_model=List[StylingAuditResponse])
+def list_styling_audits_api(diagram_id: str, db: DbSession = Depends(get_db)):
+    try:
+        diagram_uuid = UUID(str(diagram_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid diagram id")
+    audits = list_styling_audits(db, diagram_uuid)
+    return [_serialize_styling_audit(a) for a in audits]
+
+
+@app.get("/api/diagrams/{diagram_id}/styling/audit/{audit_id}", response_model=StylingAuditResponse)
+def get_styling_audit_api(diagram_id: str, audit_id: str, db: DbSession = Depends(get_db)):
+    try:
+        diagram_uuid = UUID(str(diagram_id))
+        audit_uuid = UUID(str(audit_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid identifier")
+    audit = get_styling_audit(db, audit_uuid, diagram_uuid)
+    if not audit:
+        raise HTTPException(status_code=404, detail="Styling audit not found")
+    return _serialize_styling_audit(audit)
 
 
 @app.post('/api/diagram/render')
@@ -360,38 +508,58 @@ def render_diagram_svg(
 
     svg_text = None
     resolved_path = None
+    img_record: Image | None = None
+    ir_record: DiagramIR | None = None
+
     if image_id:
-        img = db.get(Image, image_id)
-        if not img:
+        img_record = db.get(Image, image_id)
+        if not img_record:
             raise HTTPException(status_code=404, detail="Image not found")
-        resolved_path = img.file_path
+        resolved_path = img_record.file_path
+        if getattr(img_record, "ir_id", None):
+            ir_candidate = db.get(DiagramIR, img_record.ir_id)
+            if ir_candidate:
+                ir_record = ir_candidate
+                svg_text = ir_candidate.svg_text
 
     if file_path:
         resolved_path = file_path
 
-    if resolved_path:
+    if (svg_text is None or not str(svg_text).strip()) and resolved_path:
         path = Path(resolved_path)
         if not path.exists():
             raise HTTPException(status_code=404, detail="SVG file not found")
-        if path.suffix.lower() != ".svg":
-            raise HTTPException(status_code=400, detail="Requested file is not an SVG. Regenerate diagrams as SVG.")
-        try:
-            svg_text = read_text_file(str(path))
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+        if path.suffix.lower() == ".svg":
+            try:
+                svg_text = read_text_file(str(path))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+        else:
+            try:
+                blob = path.read_bytes()
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+            mime, _ = mimetypes.guess_type(path.name)
+            if not mime:
+                mime = "image/png" if path.suffix.lower() == ".png" else "application/octet-stream"
+            encoded = base64.b64encode(blob).decode("ascii")
+            svg_text = (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">'
+                f'<image href="data:{mime};base64,{encoded}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" />'
+                '</svg>'
+            )
 
     if svg_text is None or not str(svg_text).strip():
         raise HTTPException(status_code=400, detail="No svg source provided")
 
     semantic_intent = None
-    if image_id:
-        img = db.get(Image, image_id)
-        if img and getattr(img, "ir_id", None):
-            ir = db.get(DiagramIR, img.ir_id)
-            if ir and isinstance(ir.ir_json, dict):
-                intent_payload = ir.ir_json.get("aesthetic_intent")
-                if isinstance(intent_payload, dict):
-                    semantic_intent = SemanticAestheticIR.from_dict(intent_payload)
+    intent_source = ir_record
+    if intent_source is None and img_record and getattr(img_record, "ir_id", None):
+        intent_source = db.get(DiagramIR, img_record.ir_id)
+    if intent_source and isinstance(intent_source.ir_json, dict):
+        intent_payload = intent_source.ir_json.get("aesthetic_intent")
+        if isinstance(intent_payload, dict):
+            semantic_intent = SemanticAestheticIR.from_dict(intent_payload)
 
     if animated:
         svg_text = render_svg(svg_text, animated=True, debug=debug, enhanced=enhanced, semantic_intent=semantic_intent, use_v2=enhanced)
@@ -399,6 +567,36 @@ def render_diagram_svg(
         svg_text = render_svg(svg_text, animated=False, debug=debug, enhanced=True, semantic_intent=semantic_intent)
 
     return JSONResponse(content={"svg": svg_text})
+
+
+@app.get("/mcp/discover", response_model=MCPDiscoverResponse)
+def mcp_discover_endpoint():
+    tools = mcp_registry.list_tools()
+    return MCPDiscoverResponse(tools=tools)
+
+
+@app.post("/mcp/execute", response_model=MCPExecuteResponse)
+def mcp_execute_endpoint(payload: MCPExecuteRequest, db: DbSession = Depends(get_db)):
+    context: dict = {"db": db}
+    if payload.session_id:
+        session_record = db.get(SessionRecord, payload.session_id)
+        if not session_record:
+            raise HTTPException(status_code=404, detail="Session not found")
+        context["session"] = session_record
+        context["session_id"] = str(session_record.id)
+    if payload.plan_id:
+        context["plan_id"] = str(payload.plan_id)
+    user_prompt = payload.args.get("userPrompt") if isinstance(payload.args, dict) else None
+    if user_prompt:
+        context.setdefault("user_message", user_prompt)
+    try:
+        result = mcp_registry.execute(payload.tool_id, payload.args or {}, context=context)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    audit_id = result.get("audit_id") or result.get("auditId")
+    return MCPExecuteResponse(result=result, audit_id=audit_id)
 
 
 @app.get("/api/debug/modules")
