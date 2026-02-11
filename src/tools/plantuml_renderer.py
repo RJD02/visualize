@@ -2,12 +2,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
+from uuid import UUID
 
 from src.models.architecture_plan import ArchitecturePlan
 from src.renderer import render_plantuml, render_plantuml_svg
+from src.renderers.mermaid_renderer import render_mermaid_svg
+from src.services.styling_audit_service import record_styling_audit
+from src.tools.diagram_validator import validate_and_sanitize
 from src.utils.config import settings
 from src.utils.file_utils import ensure_dir
+
+
+_DEFAULT_DIAGRAM_TYPE = "system_context"
 
 
 def _validate_pure_plantuml(plantuml: str) -> None:
@@ -75,7 +82,11 @@ def _relationships(plan: ArchitecturePlan, aliases: Dict[str, str]) -> List[str]
     return rels
 
 
-def generate_plantuml_from_plan(plan: ArchitecturePlan, overrides: dict | None = None) -> List[dict]:
+def generate_plantuml_from_plan(
+    plan: ArchitecturePlan,
+    overrides: dict | None = None,
+    diagram_types: List[str] | None = None,
+) -> List[dict]:
     overrides = overrides or {}
     layout_override = overrides.get("layout")
     zone_order = overrides.get("zone_order")
@@ -108,7 +119,15 @@ def generate_plantuml_from_plan(plan: ArchitecturePlan, overrides: dict | None =
         if label not in aliases:
             aliases[label] = _alias_for(label, used)
 
-    for view in plan.diagram_views:
+    requested_views: List[str]
+    if diagram_types:
+        requested_views = [view.strip() for view in diagram_types if view]
+    else:
+        requested_views = list(plan.diagram_views)
+    if not requested_views:
+        requested_views = [_DEFAULT_DIAGRAM_TYPE]
+
+    for view in requested_views:
         header = _diagram_header(plan, layout_override=layout_override)
         parts = [header]
         items_map = _zone_items_for_view(plan, view)
@@ -144,19 +163,66 @@ def generate_plantuml_from_plan(plan: ArchitecturePlan, overrides: dict | None =
         # relationships are not filtered by view currently; they connect existing items
         parts.extend(_relationships(plan, aliases))
         parts.append("@enduml")
-        diagrams.append({"type": view, "plantuml": "\n".join(parts)})
+        diagram_text = "\n".join(parts)
+        diagrams.append(
+            {
+                "type": view,
+                "plantuml": diagram_text,
+                "llm_diagram": diagram_text,
+                "format": "plantuml",
+                "schema_version": 1,
+            }
+        )
     return diagrams
 
 
-def render_diagrams(diagrams: List[dict], output_name: str, output_format: str = "svg") -> List[str]:
+def render_diagrams(
+    diagrams: List[dict],
+    output_name: str,
+    output_format: str = "svg",
+    audit_context: Dict[str, Any] | None = None,
+) -> List[str]:
     output_dir = ensure_dir(settings.output_dir)
     files = []
     for idx, diagram in enumerate(diagrams):
         diagram_type = diagram.get("type", "diagram").replace(" ", "_")
         file_name = f"{output_name}_{diagram_type}_{idx + 1}"
-        plantuml = diagram.get("plantuml", "@startuml\n@enduml")
+        llm_payload = diagram.get("llm_diagram")
+        llm_text: str | None = None
+        fmt = diagram.get("format")
+        if isinstance(llm_payload, dict):
+            fmt = llm_payload.get("format") or fmt
+            llm_text = (llm_payload.get("diagram") or llm_payload.get("text") or "").strip() or None
+        elif llm_payload:
+            llm_text = str(llm_payload)
+        if not llm_text:
+            plantuml_text = diagram.get("plantuml")
+            if plantuml_text:
+                llm_text = plantuml_text
+                fmt = fmt or "plantuml"
+
+        if llm_text:
+            image_path, sanitized_text, warnings, resolved_fmt = _render_llm_diagram(
+                llm_text,
+                fmt,
+                file_name,
+                output_dir,
+                output_format,
+            )
+            files.append(str(image_path))
+            _maybe_record_llm_audit(
+                audit_context,
+                diagram_plan_id=diagram.get("plan_id"),
+                diagram_type=diagram.get("type"),
+                llm_format=resolved_fmt,
+                llm_text=llm_text,
+                sanitized_text=sanitized_text,
+                warnings=warnings,
+            )
+            continue
+
+        plantuml = diagram.get("plantuml") or "@startuml\n@enduml"
         _validate_pure_plantuml(plantuml)
-        # Prefer SVG as the canonical output for downstream processing
         if output_format == "svg":
             image_path = render_plantuml_svg(plantuml, file_name)
         else:
@@ -167,8 +233,120 @@ def render_diagrams(diagrams: List[dict], output_name: str, output_format: str =
     return files
 
 
-def render_diagram_by_type(diagrams: List[dict], diagram_type: str, output_name: str, output_format: str = "png") -> List[str]:
+def render_diagram_by_type(diagrams: List[dict], diagram_type: str, output_name: str, output_format: str = "svg") -> List[str]:
     selected = [d for d in diagrams if d.get("type") == diagram_type]
     if not selected:
         return []
     return render_diagrams(selected, output_name, output_format=output_format)
+
+
+def _coerce_uuid(value: UUID | str | None) -> UUID | None:
+    if value is None:
+        return None
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except ValueError:
+        return None
+
+
+def _render_llm_diagram(
+    diagram_text: str,
+    diagram_format: str | None,
+    file_name: str,
+    output_dir: Path,
+    output_format: str,
+) -> tuple[str, str, List[str], str]:
+    fmt_token = (diagram_format or "plantuml").strip().lower()
+    if fmt_token.startswith("plant"):
+        fmt = "plantuml"
+    elif fmt_token.startswith("mermaid"):
+        fmt = "mermaid"
+    else:
+        raise ValueError(f"Unsupported diagram format '{diagram_format}'")
+
+    validation = validate_and_sanitize(diagram_text, fmt)
+    sanitized = validation.sanitized_text
+    warnings = validation.warnings
+
+    if fmt == "plantuml":
+        if output_format == "svg":
+            image_path = render_plantuml_svg(sanitized, file_name)
+        else:
+            image_path = render_plantuml(sanitized, file_name)
+        (output_dir / f"{file_name}.puml").write_text(sanitized, encoding="utf-8")
+        return str(image_path), sanitized, warnings, fmt
+
+    if output_format != "svg":
+        raise ValueError("Mermaid diagrams only support SVG output")
+    svg_text = render_mermaid_svg(sanitized)
+    svg_path = output_dir / f"{file_name}.svg"
+    svg_path.write_text(svg_text, encoding="utf-8")
+    (output_dir / f"{file_name}.mmd").write_text(sanitized, encoding="utf-8")
+    return str(svg_path), sanitized, warnings, fmt
+
+
+def _maybe_record_llm_audit(
+    audit_context: Dict[str, Any] | None,
+    *,
+    diagram_plan_id: str | UUID | None,
+    diagram_type: str | None,
+    llm_format: str,
+    llm_text: str,
+    sanitized_text: str,
+    warnings: List[str],
+) -> None:
+    if not audit_context:
+        return
+    db = audit_context.get("db")
+    session_id = _coerce_uuid(audit_context.get("session_id"))
+    plan_id = diagram_plan_id or audit_context.get("plan_id")
+    if not (db and session_id and plan_id):
+        return
+    record_styling_audit(
+        db,
+        session_id=session_id,
+        plan_id=plan_id,
+        diagram_id=None,
+        diagram_type=diagram_type,
+        user_prompt=audit_context.get("user_prompt"),
+        llm_format=llm_format,
+        llm_diagram=llm_text,
+        sanitized_diagram=sanitized_text,
+        extracted_intent=None,
+        styling_plan=None,
+        execution_steps=[f"Validated {llm_format} diagram before rendering."],
+        agent_reasoning="render_diagrams defaulted to llm_diagram input.",
+        mode="pre-svg",
+        renderer_input_before=llm_text,
+        renderer_input_after=sanitized_text,
+        svg_before=None,
+        svg_after=None,
+        validation_warnings=warnings,
+        blocked_tokens=[],
+    )
+
+
+def render_llm_plantuml(
+    diagram_text: str,
+    output_name: str,
+    *,
+    diagram_type: str | None = None,
+    output_format: str = "svg",
+) -> dict:
+    """Render PlantUML supplied directly by an LLM after validation."""
+    validation = validate_and_sanitize(diagram_text, "plantuml")
+    if output_format == "svg":
+        image_path = render_plantuml_svg(validation.sanitized_text, output_name)
+    else:
+        image_path = render_plantuml(validation.sanitized_text, output_name)
+    output_dir = ensure_dir(settings.output_dir)
+    puml_path = Path(output_dir) / f"{output_name}.puml"
+    puml_path.write_text(validation.sanitized_text, encoding="utf-8")
+    return {
+        "file_path": str(image_path),
+        "diagram_type": diagram_type,
+        "sanitized_text": validation.sanitized_text,
+        "warnings": validation.warnings,
+    }

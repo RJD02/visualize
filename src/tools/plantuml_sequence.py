@@ -4,10 +4,7 @@ import re
 
 
 def generate_plantuml_sequence_from_architecture(architecture_plan: Dict[str, Any]) -> str:
-    """
-    Generate PlantUML sequence diagram directly from architecture plan.
-    No LLM needed - just extracts components and creates a realistic flow.
-    """
+    """Generate a neutral PlantUML sequence diagram directly from the plan."""
     systems = architecture_plan.get("systems", [])
     services = architecture_plan.get("services", [])
     actors = architecture_plan.get("actors", [])

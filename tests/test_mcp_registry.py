@@ -31,3 +31,31 @@ def test_registry_unknown_tool_raises():
         assert False, "Expected ValueError"
     except ValueError as exc:
         assert "Unknown tool" in str(exc)
+
+
+def test_registry_lists_metadata_fields():
+    registry = MCPRegistry()
+
+    def handler(context):
+        return {"ok": True}
+
+    tool = MCPTool(
+        name="styling.apply_pre_svg",
+        description="Pre-SVG styling",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        side_effects="writes audits",
+        handler=handler,
+        tool_id="styling.apply_pre_svg",
+        version="v1",
+        mode="pre-svg",
+        metadata={"returns": ["rendererInputAfter", "auditId"]},
+    )
+
+    registry.register(tool)
+
+    tools = registry.list_tools()
+    assert tools[0]["id"] == "styling.apply_pre_svg"
+    assert tools[0]["version"] == "v1"
+    assert tools[0]["mode"] == "pre-svg"
+    assert tools[0]["metadata"] == {"returns": ["rendererInputAfter", "auditId"]}

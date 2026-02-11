@@ -5,12 +5,12 @@ import json
 import hashlib
 from typing import Any, Dict, Optional, Tuple
 
-from openai import OpenAI
 
 from src.animation.svg_structural_analyzer import SVGStructuralGraph, analyze_svg
 from src.aesthetics.aesthetic_plan_schema import AestheticPlan
 from src.mcp.registry import MCPTool, mcp_registry
 from src.utils.config import settings
+from src.utils.openai_client import get_openai_client
 
 
 AESTHETIC_INTELLIGENCE_PROMPT = """You are a senior visual designer specialized in SVG diagram aesthetics.
@@ -60,7 +60,7 @@ def _call_llm(prompt: str) -> Optional[str]:
     if not settings.openai_api_key:
         return None
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
+        client = get_openai_client()
         response = client.chat.completions.create(
             model=settings.openai_model,
             messages=[

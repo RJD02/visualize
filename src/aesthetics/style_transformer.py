@@ -109,11 +109,11 @@ def _build_css(plan: AestheticPlan) -> str:
         [
             "/* Aesthetic Intelligence Styles */",
             f"svg {{ background: {plan.background}; }}",
-            f".ai-node-shape {{ fill: {node_default.fill}; stroke: {node_default.stroke}; stroke-width: {node_default.strokeWidth}px; }}",
-            f".ai-node-highlight {{ fill: {node_highlight.fill}; stroke: {node_highlight.stroke}; stroke-width: {node_highlight.strokeWidth}px; }}",
-            f".ai-node-text {{ fill: {text_color}; font-family: {plan.font.family}; font-weight: {plan.font.weight}; }}",
-            f".ai-edge-line {{ stroke: {edge_default.stroke}; stroke-width: {edge_default.strokeWidth}px; }}",
-            f".ai-edge-active {{ stroke: {edge_active.stroke}; stroke-width: {edge_active.strokeWidth}px; }}",
+            f".ai-node-shape {{ fill: {node_default.fill} !important; stroke: {node_default.stroke} !important; stroke-width: {node_default.strokeWidth}px !important; }}",
+            f".ai-node-highlight {{ fill: {node_highlight.fill} !important; stroke: {node_highlight.stroke} !important; stroke-width: {node_highlight.strokeWidth}px !important; }}",
+            f".ai-node-text {{ fill: {text_color} !important; font-family: {plan.font.family}; font-weight: {plan.font.weight}; }}",
+            f".ai-edge-line {{ stroke: {edge_default.stroke} !important; stroke-width: {edge_default.strokeWidth}px !important; }}",
+            f".ai-edge-active {{ stroke: {edge_active.stroke} !important; stroke-width: {edge_active.strokeWidth}px !important; }}",
         ]
     )
 
@@ -212,7 +212,13 @@ def apply_aesthetic_plan(
             break
     if style_el is None:
         style_el = ET.Element("style", {"id": "ai-aesthetic-style"})
-        root.insert(0, style_el)
+    else:
+        root.remove(style_el)
+    root.append(style_el)
     style_el.text = _build_css(plan)
+
+    # Normalize namespaces so downstream consumers get a <svg> root without prefixes
+    ET.register_namespace("", "http://www.w3.org/2000/svg")
+    ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
 
     return ET.tostring(root, encoding="unicode")

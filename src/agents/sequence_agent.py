@@ -4,9 +4,9 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Optional
 
-from openai import OpenAI
 
 from src.utils.config import settings
+from src.utils.openai_client import get_openai_client
 
 
 SEQUENCE_GEN_SYSTEM = """You are a sequence diagram generation agent for software architecture.
@@ -71,7 +71,7 @@ class SequenceGenerationAgent:
                 ],
             }
 
-        client = OpenAI(api_key=settings.openai_api_key)
+        client = get_openai_client()
 
         # Extract key information from architecture plan
         systems = architecture_plan.get("systems", [])

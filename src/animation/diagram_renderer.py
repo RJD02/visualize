@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import uuid
 from xml.etree import ElementTree as ET
+import base64
+import re
+from typing import Union
 
 from src.animation.svg_parser import ParsedSvg, parse_svg
 from src.animation.animation_plan_generator import generate_animation_plan
@@ -22,6 +25,22 @@ from src.animation.semantic_invariance_checker import validate_animation_safety
 from src.aesthetics.style_transformer import apply_aesthetic_plan
 from src.aesthetics.visual_grammar import build_aesthetic_plan
 from src.intent.semantic_aesthetic_ir import SemanticAestheticIR
+
+
+def _has_svg_root(svg_text: str) -> bool:
+    """Return True if the payload parses into an <svg> root element."""
+    if svg_text is None:
+        return False
+    try:
+        root = ET.fromstring(svg_text.strip())
+    except Exception:
+        return False
+    tag = root.tag
+    if "}" in tag:
+        tag = tag.split("}", 1)[1]
+    elif ":" in tag:
+        tag = tag.split(":", 1)[1]
+    return tag.lower() == "svg"
 
 
 def _append_class(el: ET.Element, class_name: str) -> None:
@@ -60,6 +79,32 @@ def render_svg(
     """
     if svg_text is None or not str(svg_text).strip():
         return svg_text or ""
+    # If the incoming payload is not SVG (e.g., PNG bytes or a base64 image),
+    # and the caller requested animation, wrap it inside an SVG <image/>
+    def _is_svg(s: str) -> bool:
+        return _has_svg_root(s)
+
+    def _wrap_non_svg(s: Union[str, bytes]) -> str:
+        # Accept raw bytes or a string that may be base64 or raw binary mapped into a str.
+        if isinstance(s, bytes):
+            b = s
+            mime = "image/png"
+            data = base64.b64encode(b).decode("ascii")
+            data_url = f"data:{mime};base64,{data}"
+        else:
+            s_strip = s.strip()
+            if s_strip.startswith("data:"):
+                data_url = s_strip
+            elif re.fullmatch(r"[A-Za-z0-9+/=\n\r]+", s_strip):
+                # Looks like base64 without data: prefix — assume PNG
+                data_url = f"data:image/png;base64,{s_strip.replace('\n','').replace('\r','')}"
+            else:
+                # Fallback: base64-encode the UTF-8 bytes of the string
+                b = s.encode("utf-8", errors="ignore")
+                data = base64.b64encode(b).decode("ascii")
+                data_url = f"data:image/png;base64,{data}"
+
+        return f'<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"><image href="{data_url}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet"/></svg>'
     if not animated:
         if enhanced:
             intent = semantic_intent or SemanticAestheticIR()
@@ -67,6 +112,11 @@ def render_svg(
             plan, highlights = build_aesthetic_plan(intent, graph)
             return apply_aesthetic_plan(svg_text, plan, graph=graph, highlight_override=highlights)
         return svg_text
+
+    # If requested animation but input isn't SVG, wrap it so we can still apply
+    # container-level animations. Prefer this wrapping only for animated flows.
+    if animated and not _is_svg(svg_text):
+        svg_text = _wrap_non_svg(svg_text)
 
     if use_v2:
         return render_svg_v2(svg_text, debug=debug, enhanced=enhanced, semantic_intent=semantic_intent)
@@ -97,6 +147,16 @@ def render_svg_v2(
         graph = analyze_svg(svg_text, "svg-aesthetic")
         plan, highlights = build_aesthetic_plan(intent, graph)
         svg_text = apply_aesthetic_plan(svg_text, plan, graph=graph, highlight_override=highlights)
+
+    # If incoming content is not SVG (e.g., PNG bytes), wrap it so v2 can still
+    # generate a container-level animation. This preserves the image visually
+    # while enabling simple CSS effects on the outer SVG/image element.
+    if not _has_svg_root(svg_text):
+        # Reuse the same wrapping logic as render_svg
+        b = svg_text.encode("utf-8", errors="ignore")
+        data = base64.b64encode(b).decode("ascii")
+        data_url = f"data:image/png;base64,{data}"
+        svg_text = f'<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"><image href="{data_url}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" id="embedded_img"/></svg>'
 
     # Analyze SVG structure
     svg_id = f"svg-{uuid.uuid4().hex[:8]}"

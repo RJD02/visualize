@@ -1,7 +1,9 @@
 """Visual Grammar maps semantic intent to concrete visuals."""
 from __future__ import annotations
 
-from typing import Dict, Optional, Set, Tuple
+import re
+
+from typing import Dict, List, Optional, Set, Tuple
 
 from src.aesthetics.aesthetic_plan_schema import AestheticPlan
 from src.aesthetics.style_transformer import HighlightSelection
@@ -11,6 +13,52 @@ from src.intent.semantic_aesthetic_ir import SemanticAestheticIR
 
 def _normalize_key(value: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in (value or "").lower()).strip("_")
+
+
+def _normalize_color_value(value: str) -> Optional[str]:
+    if not value:
+        return None
+    token = value.strip()
+    if token.startswith('#'):
+        raw = token.lstrip('#')
+        if len(raw) == 3:
+            raw = ''.join(ch * 2 for ch in raw)
+        if len(raw) != 6:
+            return None
+        try:
+            int(raw, 16)
+        except ValueError:
+            return None
+        return f"#{raw.upper()}"
+    if token.lower().startswith('rgb'):
+        match = re.match(r"rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)", token, flags=re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            r, g, b = (max(0, min(255, int(val))) for val in match.groups())
+        except ValueError:
+            return None
+        return f"#{r:02X}{g:02X}{b:02X}"
+    return None
+
+
+def _extract_user_palette(intent: SemanticAestheticIR) -> List[str]:
+    metadata = getattr(intent, "metadata", {}) or {}
+    palette = metadata.get("userPalette")
+    if not palette:
+        return []
+    if isinstance(palette, str):
+        palette_values = [palette]
+    elif isinstance(palette, list):
+        palette_values = [str(entry) for entry in palette]
+    else:
+        return []
+    normalized: List[str] = []
+    for entry in palette_values:
+        color = _normalize_color_value(entry)
+        if color and color not in normalized:
+            normalized.append(color)
+    return normalized
 
 
 def _palette_for_intent(intent: SemanticAestheticIR) -> Dict[str, Dict[str, str]]:
@@ -73,6 +121,19 @@ def _palette_for_intent(intent: SemanticAestheticIR) -> Dict[str, Dict[str, str]
             "edge": "#0f172a",
             "edge_active": "#0ea5e9",
             "font_weight": "600",
+        })
+
+    user_palette = _extract_user_palette(intent)
+    if user_palette:
+        primary = user_palette[0]
+        secondary = user_palette[1] if len(user_palette) > 1 else user_palette[0]
+        base.update({
+            "node_fill": primary,
+            "node_stroke": secondary,
+            "node_highlight_fill": secondary,
+            "node_highlight_stroke": primary,
+            "edge": secondary,
+            "edge_active": secondary,
         })
 
     return base

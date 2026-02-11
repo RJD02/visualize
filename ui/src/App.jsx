@@ -1,4 +1,49 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { memo, useMemo, useState, useEffect, useRef } from 'react';
+
+const normalizeSvg = (svg) => {
+    if (!svg) return svg;
+    return svg
+        .replace(/xmlns=""([^"]+)""/g, 'xmlns="$1"')
+        .replace(/<\s*ns\d+:/gi, '<')
+        .replace(/<\/\s*ns\d+:/gi, '</')
+        .replace(/\s+xmlns:ns\d+="[^"]*"/gi, '');
+};
+
+const svgCacheKey = (imageId, animated, enhanced) => `${imageId}:${animated ? 'anim' : 'static'}:${enhanced ? 'enhanced' : 'original'}`;
+
+const fetchJson = async (url, options = {}, timeoutMs = 120000) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+            const errMsg = (data && (data.error || data.detail)) || res.statusText || 'Request failed';
+            throw new Error(errMsg);
+        }
+        return data;
+    } catch (err) {
+        if (err && err.name === 'AbortError') {
+            throw new Error('Request timed out. Please try again.');
+        }
+        throw err;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+};
+
+const fetchDiagramSvg = async (imageId, animated, enhanced) => {
+    const url = `/api/diagram/render?format=svg&animated=${animated ? 'true' : 'false'}&enhanced=${enhanced ? 'true' : 'false'}&image_id=${imageId}`;
+    const data = await fetchJson(url, { method: 'GET' });
+    if (data && data.svg) data.svg = normalizeSvg(data.svg);
+    return data;
+};
+
+const extractGithubUrl = (value) => {
+    if (!value) return null;
+    const match = value.match(/https?:\/\/github\.com\/[\w.-]+\/[\w.-]+/i);
+    return match ? match[0] : null;
+};
 
 const DiffViewer = ({ before, after, label }) => {
     if (!before && !after) return null;
@@ -148,6 +193,81 @@ const PlanDetail = ({ plan }) => {
     );
 };
 
+const InlineDiagram = memo(({ image, className = '', onClick, enhanced = true, cacheRef, animated = false }) => {
+    const renderCountRef = useRef(0);
+    renderCountRef.current += 1;
+    const [svgMarkup, setSvgMarkup] = useState(null);
+    const [error, setError] = useState(null);
+
+    if (typeof window !== 'undefined' && window.Cypress && image?.id) {
+        window.__inlineDiagramRenderCounts = window.__inlineDiagramRenderCounts || {};
+        window.__inlineDiagramRenderCounts[image.id] = renderCountRef.current;
+    }
+
+    useEffect(() => {
+        if (!image?.id) return;
+        let cancelled = false;
+        const cacheKey = svgCacheKey(image.id, animated, enhanced);
+        const cacheStore = cacheRef?.current;
+        if (cacheStore && cacheStore[cacheKey]) {
+            setSvgMarkup(cacheStore[cacheKey]);
+            setError(null);
+            return;
+        }
+        setSvgMarkup(null);
+        setError(null);
+        (async () => {
+            try {
+                const data = await fetchDiagramSvg(image.id, animated, enhanced);
+                if (cancelled) return;
+                const svgContent = data?.svg || null;
+                if (svgContent && cacheStore) cacheStore[cacheKey] = svgContent;
+                setSvgMarkup(svgContent);
+            } catch (err) {
+                if (!cancelled) setError(err?.message || 'Unable to load SVG');
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [image?.id, image?.version, animated, enhanced, cacheRef]);
+
+    if (!image) return null;
+    if (error) {
+        return (
+            <div className={`mt-2 text-xs text-rose-300 border border-rose-900 rounded-lg p-2 ${className}`}>
+                Failed to load diagram: {error}
+            </div>
+        );
+    }
+    if (!svgMarkup) {
+        return (
+            <div className={`mt-2 text-xs text-slate-400 border border-slate-800/60 rounded-lg p-2 ${className}`}>
+                Loading diagram...
+            </div>
+        );
+    }
+    return (
+        <div
+            data-cy="inline-diagram"
+            data-image-id={image.id}
+            className={`mt-2 rounded-lg border border-slate-800 bg-black/20 ${className}`}
+            style={{ cursor: onClick ? 'zoom-in' : 'default' }}
+            onClick={onClick}
+            dangerouslySetInnerHTML={{ __html: svgMarkup }}
+        />
+    );
+}, (prev, next) => {
+    const prevImage = prev.image || {};
+    const nextImage = next.image || {};
+    const sameImage = prevImage.id === nextImage.id && prevImage.version === nextImage.version;
+    return sameImage
+        && prev.enhanced === next.enhanced
+        && prev.animated === next.animated
+        && prev.className === next.className
+        && prev.cacheRef === next.cacheRef;
+});
+
 const inferDiagramType = (filePath) => {
     if (!filePath) return 'diagram';
     const name = (filePath.split('/').pop() || '').replace(/\.(png|svg)$/i, '');
@@ -156,6 +276,23 @@ const inferDiagramType = (filePath) => {
         return parts.slice(1, -1).join('_');
     }
     return 'diagram';
+};
+
+const selectImageForCommand = (message, imageList) => {
+    if (!message || !imageList || !imageList.length) return null;
+    const lowered = message.toLowerCase();
+    const order = [...imageList].sort((a, b) => {
+        if (a.version != null && b.version != null) return b.version - a.version;
+        const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return bTime - aTime;
+    });
+    const matchByType = (type) => order.find((img) => inferDiagramType(img.file_path).includes(type));
+    if (lowered.includes('component')) return matchByType('component') || order[0];
+    if (lowered.includes('container')) return matchByType('container') || order[0];
+    if (lowered.includes('system')) return matchByType('system_context') || order[0];
+    if (lowered.includes('sequence')) return matchByType('sequence') || order[0];
+    return order[0];
 };
 
 export default function App() {
@@ -183,48 +320,12 @@ export default function App() {
     const [planDetailsMap, setPlanDetailsMap] = useState({});
     const [planDetailsVisible, setPlanDetailsVisible] = useState({});
     const [planDetailsLoading, setPlanDetailsLoading] = useState({});
+    const [inlineAnimationMap, setInlineAnimationMap] = useState({});
     const inlineSvgCacheRef = useRef({});
-
-    const extractGithubUrl = (value) => {
-        if (!value) return null;
-        const match = value.match(/https?:\/\/github\.com\/[\w.-]+\/[\w.-]+/i);
-        return match ? match[0] : null;
-    };
-
-    const fetchJson = async (url, options = {}, timeoutMs = 120000) => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-            const res = await fetch(url, { ...options, signal: controller.signal });
-            const data = await res.json().catch(() => null);
-            if (!res.ok) {
-                const errMsg = (data && (data.error || data.detail)) || res.statusText || 'Request failed';
-                throw new Error(errMsg);
-            }
-            return data;
-        } catch (err) {
-            if (err && err.name === 'AbortError') {
-                throw new Error('Request timed out. Please try again.');
-            }
-            throw err;
-        } finally {
-            clearTimeout(timeoutId);
-        }
-    };
-
-    const normalizeSvg = (svg) => {
-        if (!svg) return svg;
-        return svg
-            .replace(/xmlns=\"\"([^\"]+)\"\"/g, 'xmlns="$1"')
-            .replace(/<\s*ns\d+:/gi, '<')
-            .replace(/<\/\s*ns\d+:/gi, '</')
-            .replace(/\s+xmlns:ns\d+="[^"]*"/gi, '');
-    };
-
-    const svgCacheKey = (imageId, animated, enhanced) => `${imageId}:${animated ? 'anim' : 'static'}:${enhanced ? 'enhanced' : 'original'}`;
 
     useEffect(() => {
         inlineSvgCacheRef.current = {};
+        setInlineAnimationMap({});
     }, [sessionId]);
 
     useEffect(() => {
@@ -239,30 +340,6 @@ export default function App() {
             return next;
         });
     }, [images]);
-
-    const selectImageForCommand = (message, imageList) => {
-        if (!message || !imageList || !imageList.length) return null;
-        const lowered = message.toLowerCase();
-        const order = [...imageList].sort((a, b) => {
-            if (a.version != null && b.version != null) return b.version - a.version;
-            const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
-            const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
-            return bTime - aTime;
-        });
-        const matchByType = (type) => order.find((img) => inferDiagramType(img.file_path).includes(type));
-        if (lowered.includes('component')) return matchByType('component') || order[0];
-        if (lowered.includes('container')) return matchByType('container') || order[0];
-        if (lowered.includes('system')) return matchByType('system_context') || order[0];
-        if (lowered.includes('sequence')) return matchByType('sequence') || order[0];
-        return order[0];
-    };
-
-    const fetchDiagramSvg = async (imageId, animated, enhanced) => {
-        const url = `/api/diagram/render?format=svg&animated=${animated ? 'true' : 'false'}&enhanced=${enhanced ? 'true' : 'false'}&image_id=${imageId}`;
-        const data = await fetchJson(url, { method: 'GET' });
-        if (data && data.svg) data.svg = normalizeSvg(data.svg);
-        return data;
-    };
 
     const toggleStylingPanel = async (imageId) => {
         setStylingAuditOpen((prev) => ({ ...prev, [imageId]: !prev[imageId] }));
@@ -301,64 +378,6 @@ export default function App() {
             setPlanDetailsLoading((prev) => ({ ...prev, [planId]: false }));
         }
         setPlanDetailsVisible((prev) => ({ ...prev, [planId]: true }));
-    };
-
-    const InlineDiagram = ({ image, className = '', onClick, enhanced = true }) => {
-        const [svgMarkup, setSvgMarkup] = useState(null);
-        const [error, setError] = useState(null);
-
-        useEffect(() => {
-            if (!image?.id) return;
-            let cancelled = false;
-            const cacheKey = svgCacheKey(image.id, false, enhanced);
-            if (inlineSvgCacheRef.current[cacheKey]) {
-                setSvgMarkup(inlineSvgCacheRef.current[cacheKey]);
-                setError(null);
-                return;
-            }
-            setSvgMarkup(null);
-            setError(null);
-            (async () => {
-                try {
-                    const data = await fetchDiagramSvg(image.id, false, enhanced);
-                    if (cancelled) return;
-                    const svgContent = data?.svg || null;
-                    if (svgContent) inlineSvgCacheRef.current[cacheKey] = svgContent;
-                    setSvgMarkup(svgContent);
-                } catch (err) {
-                    if (!cancelled) setError(err?.message || 'Unable to load SVG');
-                }
-            })();
-            return () => {
-                cancelled = true;
-            };
-        }, [image?.id, image?.version, enhanced]);
-
-        if (!image) return null;
-        if (error) {
-            return (
-                <div className={`mt-2 text-xs text-rose-300 border border-rose-900 rounded-lg p-2 ${className}`}>
-                    Failed to load diagram: {error}
-                </div>
-            );
-        }
-        if (!svgMarkup) {
-            return (
-                <div className={`mt-2 text-xs text-slate-400 border border-slate-800/60 rounded-lg p-2 ${className}`}>
-                    Loading diagram...
-                </div>
-            );
-        }
-        return (
-            <div
-                data-cy="inline-diagram"
-                data-image-id={image.id}
-                className={`mt-2 rounded-lg border border-slate-800 bg-black/20 ${className}`}
-                style={{ cursor: onClick ? 'zoom-in' : 'default' }}
-                onClick={onClick}
-                dangerouslySetInnerHTML={{ __html: svgMarkup }}
-            />
-        );
     };
 
     useEffect(() => {
@@ -413,10 +432,14 @@ export default function App() {
         setExpandedImage(img);
         setEnhancedEnabled(enhanced);
         setAnimationEnabled(false);
+        setInlineAnimationMap((prev) => ({ ...prev, [img.id]: false }));
         try {
             const data = await fetchDiagramSvg(img.id, false, enhanced);
             const key = svgCacheKey(img.id, false, enhanced);
             setExpandedSvgMap((p) => ({ ...p, [key]: data.svg }));
+            if (inlineSvgCacheRef.current) {
+                inlineSvgCacheRef.current[key] = data.svg;
+            }
         } catch (e) { /* ignore */ }
     };
 
@@ -429,6 +452,10 @@ export default function App() {
             const data = await fetchDiagramSvg(img.id, true, true);
             const key = svgCacheKey(img.id, true, true);
             setExpandedSvgMap((p) => ({ ...p, [key]: data.svg }));
+            if (inlineSvgCacheRef.current) {
+                inlineSvgCacheRef.current[key] = data.svg;
+            }
+            setInlineAnimationMap((prev) => ({ ...prev, [img.id]: true }));
         } catch (e) { /* ignore */ }
     };
 
@@ -555,6 +582,10 @@ export default function App() {
                     const data = await fetchDiagramSvg(lastImage.id, true, true);
                     const key = svgCacheKey(lastImage.id, true, true);
                     setExpandedSvgMap((p) => ({ ...p, [key]: data.svg }));
+                    if (inlineSvgCacheRef.current) {
+                        inlineSvgCacheRef.current[key] = data.svg;
+                    }
+                    setInlineAnimationMap((prev) => ({ ...prev, [lastImage.id]: true }));
                     setInlineSvgToken((v) => v + 1);
                 } catch (e) { /* ignore */ }
             }
@@ -700,6 +731,8 @@ export default function App() {
                                                             image={imageMap.get(m.image_id)}
                                                             className="max-w-full"
                                                             onClick={() => setExpandedImage(imageMap.get(m.image_id))}
+                                                            cacheRef={inlineSvgCacheRef}
+                                                            animated={!!inlineAnimationMap[m.image_id]}
                                                         />
                                                         <div className="mt-2 flex flex-wrap gap-2">
                                                             <button
@@ -859,6 +892,8 @@ export default function App() {
                                             image={img}
                                             className="max-w-full"
                                             onClick={() => setExpandedImage(img)}
+                                            cacheRef={inlineSvgCacheRef}
+                                            animated={!!inlineAnimationMap[img.id]}
                                         />
                                         <div className="mt-2 flex flex-wrap gap-2">
                                             <button

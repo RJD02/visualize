@@ -10,12 +10,12 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
 from google.genai import types
-from openai import OpenAI
 
 from src.models.architecture_plan import ArchitecturePlan
 from src.tools.file_storage import save_json
 from src.tools.schema_validator import validate_architecture_plan
 from src.utils.config import settings
+from src.utils.openai_client import get_openai_client
 
 
 ARCHITECT_INSTRUCTION = (
@@ -72,7 +72,7 @@ def _extract_json(text: str) -> Dict[str, Any]:
 def generate_architecture_plan_from_text(input_text: str) -> Dict[str, Any]:
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not set")
-    client = OpenAI(api_key=settings.openai_api_key)
+    client = get_openai_client()
     response = client.chat.completions.create(
         model=settings.openai_model,
         messages=[

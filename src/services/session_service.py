@@ -3,24 +3,36 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
-from src.db_models import ArchitecturePlan as ArchitecturePlanRecord, DiagramFile, DiagramIR, Image, Message, Session
+from src.db_models import (
+    ArchitecturePlan as ArchitecturePlanRecord,
+    DiagramFile,
+    DiagramIR,
+    Image,
+    Message,
+    PlanExecution,
+    PlanRecord,
+    Session,
+)
 from src.models.architecture_plan import ArchitecturePlan as ArchitecturePlanModel
-from src.agents.conversation_planner_agent import ConversationPlannerAgent
+from src.agents.conversation_planner_agent import ConversationPlannerAgent, LATEST_IMAGE_PLACEHOLDER
 from src.mcp.registry import mcp_registry
 from src.mcp.tools import register_mcp_tools
 from src.orchestrator.adk_workflow import ADKWorkflow
 from src.services.intent import explain_architecture
+from src.services.styling_audit_service import record_styling_audit
 from src.tools.file_storage import save_json
 from src.tools.text_extractor import extract_text
-from src.tools.svg_ir import generate_svg_from_plan, edit_ir_svg, render_ir_svg
+from src.tools.svg_ir import generate_svg_from_plan, render_ir_svg, build_ir_from_plan, ZONE_TITLES
 from src.tools.plantuml_renderer import generate_plantuml_from_plan, render_diagrams
+from src.tools.plantuml_renderer import render_llm_plantuml
+from src.tools.mermaid_renderer import render_llm_mermaid
 from src.utils.config import settings
-from src.intent.semantic_intent_llm import generate_semantic_intent
+from src.intent import generate_semantic_intent
 from src.intent.diagram_intent import detect_intent
 from src.intent.semantic_to_structural import (
     architecture_ir_from_plan,
@@ -38,7 +50,29 @@ from xml.etree import ElementTree as ET
 import json
 from src.utils.file_utils import read_text_file
 import logging
+import time
+from src.intent.semantic_aesthetic_ir import SemanticAestheticIR
+from src.tools.diagram_validator import DiagramValidationError
 
+
+logger = logging.getLogger(__name__)
+
+
+def _ensure_ir_metadata(svg_text: str, payload: dict) -> str:
+    try:
+        root = ET.fromstring(svg_text)
+    except ET.ParseError:
+        return svg_text
+    has_meta = False
+    for elem in root.iter():
+        if elem.tag.endswith("metadata") and (elem.get("id") == "ir_metadata" or (elem.text and "diagram_type" in elem.text)):
+            has_meta = True
+            break
+    if not has_meta:
+        meta = ET.Element("metadata", {"id": "ir_metadata"})
+        meta.text = json.dumps(payload)
+        root.insert(0, meta)
+    return ET.tostring(root, encoding="unicode")
 
 def save_edited_ir(db: DbSession, image_id: str, svg_text: str, reason: str = "edited via ui") -> Image:
     image = db.get(Image, image_id)
@@ -50,6 +84,11 @@ def save_edited_ir(db: DbSession, image_id: str, svg_text: str, reason: str = "e
 
     diagram_type = _infer_diagram_type(image.file_path)
     parent_ir_id = getattr(image, "ir_id", None)
+    inherited_ir_json = None
+    if parent_ir_id:
+        parent_ir = db.get(DiagramIR, parent_ir_id)
+        if parent_ir and parent_ir.ir_json:
+            inherited_ir_json = dict(parent_ir.ir_json)
     ir_version = _create_ir_version(
         db,
         session,
@@ -57,6 +96,7 @@ def save_edited_ir(db: DbSession, image_id: str, svg_text: str, reason: str = "e
         svg_text=svg_text,
         reason=reason,
         parent_ir_id=parent_ir_id,
+        ir_json=inherited_ir_json,
     )
     svg_file = render_ir_svg(svg_text, f"{session.id}_{diagram_type}_{ir_version.version}")
     created_image = _create_image(
@@ -127,12 +167,23 @@ def get_latest_plan(db: DbSession, session_id: UUID) -> ArchitecturePlanRecord |
     ).scalars().first()
 
 
+def list_plan_records(db: DbSession, session_id: UUID) -> List[PlanRecord]:
+    return list(
+        db.execute(
+            select(PlanRecord)
+            .where(PlanRecord.session_id == session_id)
+            .order_by(PlanRecord.created_at.desc())
+        ).scalars()
+    )
+
+
 def ingest_input(
     db: DbSession,
     session: Session,
     files: Optional[List[str]],
     text: Optional[str],
     github_url: Optional[str] = None,
+    generate_images: bool = True,
 ) -> dict:
     if not files and not text and not github_url:
         raise ValueError("Provide files, text, or github_url")
@@ -150,22 +201,6 @@ def ingest_input(
     intent_result = detect_intent(content, github_url=github_url, has_files=bool(files))
     session.input_text = content
 
-    def _ensure_ir_metadata(svg_text: str, payload: dict) -> str:
-        try:
-            root = ET.fromstring(svg_text)
-        except ET.ParseError:
-            return svg_text
-        has_meta = False
-        for elem in root.iter():
-            if elem.tag.endswith("metadata") and (elem.get("id") == "ir_metadata" or (elem.text and "diagram_type" in elem.text)):
-                has_meta = True
-                break
-        if not has_meta:
-            meta = ET.Element("metadata", {"id": "ir_metadata"})
-            meta.text = json.dumps(payload)
-            root.insert(0, meta)
-        return ET.tostring(root, encoding="unicode")
-
     workflow = ADKWorkflow()
     result: Dict[str, Any] = {}
     if intent_result.primary in {"story", "sequence"}:
@@ -177,37 +212,102 @@ def ingest_input(
         plan_data = result["architecture_plan"]
         plan = ArchitecturePlanRecord(session_id=session.id, data=plan_data)
         db.add(plan)
+        db.flush()
+        logger.info(
+            "Stored architecture plan",
+            extra={
+                "session_id": str(session.id),
+                "diagram_views": plan_data.get("diagram_views", []),
+                "zones": list((plan_data.get("zones") or {}).keys()),
+            },
+        )
         save_json(f"{session.id}_architecture_plan.json", plan_data)
 
     plan_data = result.get("architecture_plan") or {}
+    plan_model: ArchitecturePlanModel | None = None
     if plan_data:
         plan_model = ArchitecturePlanModel.model_validate(plan_data)
+
+    metadata_cache: Dict[str, Dict[str, Any]] = {}
+
+    def _diagram_metadata_payload(diagram_type: str | None) -> Dict[str, Any]:
+        key = diagram_type or "diagram"
+        if key in metadata_cache:
+            return metadata_cache[key]
+
+        base_layout = "top-down"
+        if plan_model and getattr(plan_model, "visual_hints", None):
+            base_layout = plan_model.visual_hints.layout or base_layout
+
+        payload: Dict[str, Any] = {
+            "diagram_type": key,
+            "layout": base_layout,
+            "zone_order": list(ZONE_TITLES.keys()),
+            "nodes": [],
+            "edges": [],
+        }
+
+        if plan_model:
+            try:
+                ir_model = build_ir_from_plan(plan_model, key)
+                payload = {
+                    "diagram_type": ir_model.diagram_type,
+                    "layout": ir_model.layout,
+                    "zone_order": list(ir_model.zone_order),
+                    "nodes": [
+                        {
+                            "node_id": node.node_id,
+                            "label": node.label,
+                            "role": node.role,
+                            "zone": node.zone,
+                        }
+                        for node in (ir_model.nodes or [])
+                    ],
+                    "edges": [
+                        {
+                            "edge_id": edge.edge_id,
+                            "from_id": edge.from_id,
+                            "to_id": edge.to_id,
+                            "rel_type": edge.rel_type,
+                        }
+                        for edge in (ir_model.edges or [])
+                    ],
+                }
+            except Exception:
+                pass
+
+        metadata_cache[key] = payload
+        return payload
 
     if not settings.enable_ir:
         if plan_data:
             diagrams = generate_plantuml_from_plan(plan_model)
             files = render_diagrams(diagrams, f"{session.id}", output_format="svg")
-            for file_path in files:
-                diagram_type = _infer_diagram_type(file_path)
-                image = _create_image(
-                    db,
-                    session,
-                    file_path=file_path,
-                    prompt=None,
-                    reason=f"diagram: {diagram_type}",
-                )
-                db.add(
-                    Message(
-                        session_id=session.id,
-                        role="assistant",
-                        content="",
-                        intent="generate",
-                        image_id=image.id,
-                        message_type="image",
-                        image_version=image.version,
-                        diagram_type=diagram_type,
+            if generate_images:
+                for file_path in files:
+                    diagram_type = _infer_diagram_type(file_path)
+                    image = _create_image(
+                        db,
+                        session,
+                        file_path=file_path,
+                        prompt=None,
+                        reason=f"diagram: {diagram_type}",
                     )
-                )
+                    db.add(
+                        Message(
+                            session_id=session.id,
+                            role="assistant",
+                            content="",
+                            intent="generate",
+                            image_id=image.id,
+                            message_type="image",
+                            image_version=image.version,
+                            diagram_type=diagram_type,
+                        )
+                    )
+            else:
+                # When not generating images (e.g., API ingest), just return diagram file paths
+                result["images"] = files
     else:
         if intent_result.primary == "story":
             story_ir = story_ir_from_text(content)
@@ -310,6 +410,8 @@ def ingest_input(
                     svg_text = read_text_file(str(Path(file_path)))
                 except Exception:
                     svg_text = Path(file_path).read_text(encoding="utf-8", errors="ignore")
+
+                svg_text = _ensure_ir_metadata(svg_text, _diagram_metadata_payload(diagram_type))
                 
                 ir_version = _create_ir_version(
                     db,
@@ -321,28 +423,32 @@ def ingest_input(
                     ir_json={"intent": diagram_type},
                 )
                 
-                image = _create_image(
-                    db,
-                    session,
-                    file_path=file_path,
-                    prompt=None,
-                    reason=f"diagram: {diagram_type}",
-                    parent_image_id=None,
-                    ir_id=ir_version.id,
-                )
-                db.add(
-                    Message(
-                        session_id=session.id,
-                        role="assistant",
-                        content="",
-                        intent="generate",
-                        image_id=image.id,
-                        message_type="image",
-                        image_version=image.version,
-                        diagram_type=diagram_type,
+                if generate_images:
+                    image = _create_image(
+                        db,
+                        session,
+                        file_path=file_path,
+                        prompt=None,
+                        reason=f"diagram: {diagram_type}",
+                        parent_image_id=None,
                         ir_id=ir_version.id,
                     )
-                )
+                    db.add(
+                        Message(
+                            session_id=session.id,
+                            role="assistant",
+                            content="",
+                            intent="generate",
+                            image_id=image.id,
+                            message_type="image",
+                            image_version=image.version,
+                            diagram_type=diagram_type,
+                            ir_id=ir_version.id,
+                        )
+                    )
+                else:
+                    # collect generated file paths when images aren't created
+                    result.setdefault("images", []).append(file_path)
         else:
             db.add(
                 Message(
@@ -357,6 +463,228 @@ def ingest_input(
     return result
 
 
+def _build_planner_context(db: DbSession, session: Session) -> tuple[dict, dict]:
+    plan = get_latest_plan(db, session.id)
+    images = list_images(db, session.id)
+    diagrams = list_diagrams(db, session.id)
+    ir_versions = list_ir_versions(db, session.id)
+    all_messages = list_messages(db, session.id)
+    history = [{"role": m.role, "content": m.content} for m in all_messages[-10:]]
+    state = {
+        "active_image_id": str(images[-1].id) if images else None,
+        "diagram_types": [d.diagram_type for d in diagrams] or [ir.diagram_type for ir in ir_versions],
+        "images": [
+            {
+                "id": str(img.id),
+                "version": img.version,
+                "reason": img.reason,
+                "file_path": img.file_path,
+            }
+            for img in images
+        ],
+        "history": history,
+        "github_url": session.source_repo,
+        "input_text": session.input_text,
+        "architecture_plan": plan.data if plan else None,
+    }
+    cache = {
+        "latest_plan": plan,
+        "images": images,
+        "diagrams": diagrams,
+        "ir_versions": ir_versions,
+        "messages": all_messages,
+    }
+    return state, cache
+
+
+def _prepare_tool_arguments(
+    db: DbSession,
+    session: Session,
+    plan_result: dict,
+    tool_name: str,
+    base_args: dict | None,
+    message: str,
+) -> tuple[dict, str | None]:
+    args = dict(base_args or {})
+    diagram_count = plan_result.get("diagram_count")
+    planned_diagrams = plan_result.get("diagrams") or []
+    planned_types = [d.get("type") for d in planned_diagrams if isinstance(d, dict) and d.get("type")]
+
+    if tool_name in {
+        "generate_plantuml",
+        "generate_diagram",
+        "generate_multiple_diagrams",
+        "edit_diagram_via_semantic_understanding",
+    }:
+        args.setdefault("output_name", f"{session.id}_{_next_version(db, session.id)}")
+
+    if tool_name == "generate_multiple_diagrams":
+        if "diagram_types" not in args and planned_types:
+            if isinstance(diagram_count, int) and diagram_count > 0:
+                args["diagram_types"] = planned_types[:diagram_count]
+            else:
+                args["diagram_types"] = planned_types
+        if "diagram_types" not in args and isinstance(diagram_count, int) and diagram_count > 0:
+            latest_plan = get_latest_plan(db, session.id)
+            if latest_plan and isinstance(latest_plan.data, dict):
+                types = latest_plan.data.get("diagram_views") or []
+                if types:
+                    args["diagram_types"] = list(types)[:diagram_count]
+
+    if tool_name in {
+        "generate_plantuml",
+        "generate_diagram",
+        "generate_multiple_diagrams",
+        "edit_diagram_via_semantic_understanding",
+        "render_image_from_plan",
+        "explain_architecture",
+        "generate_sequence_from_architecture",
+        "generate_plantuml_sequence",
+    }:
+        if not args.get("architecture_plan"):
+            latest_plan = get_latest_plan(db, session.id)
+            if latest_plan:
+                args["architecture_plan"] = latest_plan.data
+            else:
+                return args, "I need an architecture plan to do that. Please generate one first."
+
+    if tool_name == "generate_sequence_from_architecture":
+        if "github_url" not in args and session.source_repo:
+            args["github_url"] = session.source_repo
+        args.setdefault("user_message", message)
+        args.setdefault("output_name", f"{session.id}_sequence_{_next_version(db, session.id)}")
+
+    if tool_name == "generate_plantuml_sequence":
+        args.setdefault("output_name", f"{session.id}_sequence_{_next_version(db, session.id)}")
+
+    if tool_name == "generate_architecture_plan" and "content" not in args:
+        if session.input_text:
+            args["content"] = session.input_text
+        else:
+            args["content"] = message
+
+    if tool_name == "edit_existing_image" and "image_id" not in args:
+        images = list_images(db, session.id)
+        if images:
+            args["image_id"] = str(images[-1].id)
+        else:
+            return args, "I need an image to edit. Generate a diagram first."
+
+    if tool_name in {"render_image_from_plan", "edit_existing_image", "edit_diagram_ir"}:
+        args.setdefault("session_id", str(session.id))
+
+    return args, None
+
+
+def _record_plan_execution(
+    db: DbSession,
+    plan_record: PlanRecord,
+    step_index: int,
+    tool_name: str,
+    arguments: dict,
+    output: dict | None,
+    audit_id: str | None,
+    duration_ms: int,
+) -> PlanExecution:
+    exec_record = PlanExecution(
+        plan_id=plan_record.id,
+        step_index=step_index,
+        tool_name=tool_name,
+        arguments=arguments,
+        output=output,
+        audit_id=_parse_uuid(audit_id) if audit_id else None,
+        duration_ms=duration_ms,
+    )
+    db.add(exec_record)
+    return exec_record
+
+
+def _handle_llm_diagram_step(
+    db: DbSession,
+    session: Session,
+    plan_record: PlanRecord,
+    *,
+    llm_payload: dict,
+    diagram_type: str | None,
+    user_prompt: str,
+) -> dict:
+    if not llm_payload:
+        raise ValueError("Missing llm_diagram payload for rendering step")
+    diagram_text = llm_payload.get("diagram") or llm_payload.get("text")
+    if not diagram_text:
+        raise ValueError("Diagram payload is empty")
+    fmt_token = (llm_payload.get("format") or "plantuml").lower()
+    if fmt_token.startswith("plant"):
+        fmt = "plantuml"
+    elif fmt_token.startswith("mermaid"):
+        fmt = "mermaid"
+    else:
+        raise ValueError(f"Unsupported diagram format '{llm_payload.get('format')}'")
+
+    target_type = (diagram_type or "diagram").replace(" ", "_")
+    version_seed = _next_version(db, session.id)
+    output_name = f"{session.id}_{target_type}_{version_seed}"
+
+    if fmt == "plantuml":
+        render_payload = render_llm_plantuml(diagram_text, output_name, diagram_type=target_type)
+        svg_text = read_text_file(render_payload["file_path"])
+    else:
+        render_payload = render_llm_mermaid(diagram_text, output_name)
+        svg_text = render_payload["svg_text"]
+
+    ir_version = _create_ir_version(
+        db,
+        session,
+        diagram_type=target_type,
+        svg_text=svg_text,
+        reason="llm diagram",
+        parent_ir_id=None,
+        ir_json={"source": "llm", "format": fmt},
+        plantuml_text=render_payload.get("sanitized_text") if fmt == "plantuml" else None,
+    )
+    created_image = _create_image(
+        db,
+        session,
+        file_path=render_payload["file_path"],
+        prompt=None,
+        reason=f"llm diagram: {target_type}",
+        ir_id=ir_version.id,
+    )
+
+    audit = record_styling_audit(
+        db,
+        session_id=session.id,
+        plan_id=plan_record.id,
+        diagram_id=created_image.id,
+        diagram_type=target_type,
+        user_prompt=user_prompt,
+        llm_format=fmt,
+        llm_diagram=diagram_text,
+        sanitized_diagram=render_payload.get("sanitized_text"),
+        extracted_intent=None,
+        styling_plan=None,
+        execution_steps=[f"Validated {fmt} diagram provided by planner."],
+        agent_reasoning=None,
+        mode="post-svg",
+        renderer_input_before=llm_diagram,
+        renderer_input_after=render_payload.get("sanitized_text"),
+        svg_before=None,
+        svg_after=svg_text,
+        validation_warnings=render_payload.get("warnings"),
+        blocked_tokens=None,
+    )
+
+    return {
+        "image": created_image,
+        "ir_version": ir_version,
+        "audit_id": str(audit.id),
+        "diagram_type": target_type,
+        "warnings": render_payload.get("warnings", []),
+        "format": fmt,
+        "schema_version": llm_payload.get("schema_version") or 1,
+    }
+
+
 def handle_message(db: DbSession, session: Session, message: str) -> dict:
     db.add(
         Message(
@@ -368,257 +696,226 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
     )
     db.commit()
 
-    planner = ConversationPlannerAgent()
-    plan = get_latest_plan(db, session.id)
-    images = list_images(db, session.id)
-    diagrams = list_diagrams(db, session.id)
-    ir_versions = list_ir_versions(db, session.id)
-    history = [
-        {"role": m.role, "content": m.content}
-        for m in list_messages(db, session.id)[-10:]
-    ]
-    state = {
-        "active_image_id": str(images[-1].id) if images else None,
-        "diagram_types": [d.diagram_type for d in diagrams] or [ir.diagram_type for ir in ir_versions],
-        "images": [
-            {"id": str(img.id), "version": img.version, "reason": img.reason}
-            for img in images
-        ],
-        "history": history,
-        "github_url": session.source_repo,
-        "input_text": session.input_text,
-        "architecture_plan": plan.data if plan else None,
-    }
-
-    if not plan and not images and not ir_versions:
-        if any(tok in (message or "").lower() for tok in ["diagram", "generate", "create", "story", "flow", "sequence"]):
-            ingest_input(db, session, files=None, text=message)
-            return {"intent": "generate", "response": "Generated.", "result": {}, "plan": {}, "tool_results": []}
-
     if not mcp_registry.get_tool("generate_architecture_plan"):
         register_mcp_tools(mcp_registry)
 
-    def _is_visual_intent(text: str) -> bool:
-        lowered = (text or "").lower()
-        intent_tokens = [
-            "calm", "minimal", "vibrant", "energetic", "highlight", "focus",
-            "visual", "aesthetic", "contrast", "noise", "attention",
-        ]
-        return any(tok in lowered for tok in intent_tokens)
+    planner = ConversationPlannerAgent()
+    state, context_cache = _build_planner_context(db, session)
+    last_image_id: UUID | None = None
+    existing_images = context_cache.get("images", []) or []
+    if existing_images:
+        last_image_id = existing_images[-1].id
 
-    def _select_image_by_hint(text: str) -> Image | None:
-        lowered = (text or "").lower()
-        if "semantic component" in lowered or "semantic_component" in lowered:
-            for img in reversed(images):
-                if "semantic_component" in (img.file_path or ""):
-                    return img
-        if "semantic container" in lowered or "semantic_container" in lowered:
-            for img in reversed(images):
-                if "semantic_container" in (img.file_path or ""):
-                    return img
-        if "semantic system" in lowered or "semantic_system_context" in lowered:
-            for img in reversed(images):
-                if "semantic_system_context" in (img.file_path or ""):
-                    return img
-        return images[-1] if images else None
+    logger.info(
+        "Planning session message",
+        extra={
+            "session_id": str(session.id),
+            "image_count": len(context_cache.get("images", [])),
+            "diagram_count": len(context_cache.get("diagrams", [])),
+            "has_plan": bool(context_cache.get("latest_plan")),
+        },
+    )
 
-    if _is_visual_intent(message) and ir_versions:
-        target_img = _select_image_by_hint(message)
-        target_ir = db.get(DiagramIR, target_img.ir_id) if target_img and target_img.ir_id else ir_versions[-1]
-        if target_ir:
-            svg_text = target_ir.svg_text
-            if not svg_text and target_img and target_img.file_path and target_img.file_path.endswith(".svg"):
-                try:
-                    svg_text = read_text_file(str(Path(target_img.file_path)))
-                except Exception:
-                    svg_text = ""
-            if not svg_text:
-                svg_text = target_ir.svg_text or ""
-            intent_ir, had_color = generate_semantic_intent(svg_text, message)
-            ir_payload = {}
-            if isinstance(target_ir.ir_json, dict):
-                ir_payload.update(target_ir.ir_json)
-            ir_payload["aesthetic_intent"] = intent_ir.to_dict()
-            ir_version = _create_ir_version(
-                db,
-                session,
-                diagram_type=target_ir.diagram_type,
-                svg_text=svg_text,
-                reason="semantic_intent",
-                parent_ir_id=target_ir.id,
-                ir_json=ir_payload,
-                plantuml_text=target_ir.plantuml_text,
-            )
-            svg_file = render_ir_svg(svg_text, f"{session.id}_{target_ir.diagram_type}_{ir_version.version}")
-            created_image = _create_image(
-                db,
-                session,
-                file_path=svg_file,
-                prompt=None,
-                reason="semantic intent",
-                ir_id=ir_version.id,
-            )
-            note = "Applied semantic visual intent." + (" (Direct color instructions were ignored.)" if had_color else "")
-            db.add(
+    plan_result = planner.plan(message, state, mcp_registry.list_tools())
+    intent = plan_result.get("intent", "clarify")
+    plan_id_value = plan_result.get("plan_id") or str(uuid4())
+    plan_uuid = _parse_uuid(plan_id_value)
+
+    logger.info(
+        "Planner produced plan",
+        extra={
+            "session_id": str(session.id),
+            "plan_id": plan_id_value,
+            "intent": intent,
+            "step_count": len(plan_result.get("plan", []) or []),
+        },
+    )
+
+    metadata_payload = plan_result.get("metadata") if isinstance(plan_result.get("metadata"), dict) else {}
+    metadata_payload = dict(metadata_payload)
+    metadata_payload["user_message"] = message
+
+    plan_record = PlanRecord(
+        id=plan_uuid,
+        session_id=session.id,
+        intent=intent,
+        plan_json=plan_result.get("plan", []),
+        metadata_json=metadata_payload,
+        executed=False,
+    )
+    db.add(plan_record)
+    db.commit()
+
+    tool_results: list[dict] = []
+    assistant_messages: list[Message] = []
+    response_text: str | None = None
+    result_payload: dict = {}
+    created_image: Image | None = None
+    error_occurred = False
+
+    for step_index, step in enumerate(plan_result.get("plan", []) or []):
+        tool_name = step.get("tool")
+        rendering_service = (step.get("rendering_service") or "").lower()
+        llm_payload_raw = step.get("llm_diagram")
+        if isinstance(llm_payload_raw, str):
+            try:
+                llm_payload = json.loads(llm_payload_raw)
+            except json.JSONDecodeError:
+                llm_payload = None
+        elif isinstance(llm_payload_raw, dict):
+            llm_payload = llm_payload_raw
+        else:
+            llm_payload = None
+        if rendering_service in {"llm_plantuml", "llm_mermaid"} or llm_payload:
+            if not llm_payload:
+                response_text = "Planner selected LLM rendering but omitted llm_diagram payload."
+                error_occurred = True
+                break
+            start = time.perf_counter()
+            try:
+                llm_result = _handle_llm_diagram_step(
+                    db,
+                    session,
+                    plan_record,
+                    llm_payload=llm_payload,
+                    diagram_type=step.get("diagram_type"),
+                    user_prompt=message,
+                )
+            except DiagramValidationError as exc:
+                blocked = ", ".join(exc.result.blocked_tokens) if getattr(exc, "result", None) else ""
+                response_text = f"Rejected diagram from planner: {exc}. {blocked}".strip()
+                error_occurred = True
+                break
+            except Exception as exc:
+                logger.exception(
+                    "Failed to render LLM diagram",
+                    extra={"session_id": str(session.id), "plan_id": str(plan_record.id)},
+                )
+                response_text = f"Unable to render provided diagram: {exc}"
+                error_occurred = True
+                break
+
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            assistant_messages.append(
                 Message(
                     session_id=session.id,
                     role="assistant",
-                    content=note,
-                    intent="semantic_intent",
-                    image_id=created_image.id,
+                    content="",
+                    intent=intent,
+                    image_id=llm_result["image"].id,
                     message_type="image",
-                    image_version=created_image.version,
-                    diagram_type=target_ir.diagram_type,
-                    ir_id=ir_version.id,
+                    image_version=llm_result["image"].version,
+                    diagram_type=llm_result["diagram_type"],
+                    ir_id=llm_result["ir_version"].id,
                 )
             )
-            db.commit()
-            return {
-                "intent": "semantic_intent",
-                "response": note,
-                "result": {"diagram_type": target_ir.diagram_type},
-                "plan": {},
-                "tool_results": [],
-            }
-
-    # Aggressive fallback: detect sequence/plantuml/flow requests BEFORE calling planner
-    lowered_msg = (message or "").lower()
-    if plan and any(keyword in lowered_msg for keyword in ["sequence", "plantuml", "plant uml", "flow", "interaction"]):
-        # Direct sequence generation - bypass planner
-        intent = "generate_sequence"
-        plan_result = {
-            "intent": "generate_sequence",
-            "plan": [{"tool": "generate_plantuml_sequence", "arguments": {}}],
-            "diagram_count": None,
-            "diagrams": [{"type": "sequence", "reason": "user requested"}],
-        }
-    else:
-        plan_result = planner.plan(message, state, mcp_registry.list_tools())
-        intent = plan_result.get("intent", "clarify")
-
-    def _looks_like_color_request(text: str) -> bool:
-        lowered = (text or "").lower()
-        return any(token in lowered for token in [
-            "color", "colour", "palette", "theme", "style", "aesthetic", "vibrant", "contrast",
-            "highlight", "emphasis",
-        ])
-
-    def _select_image_by_hint(text: str) -> Image | None:
-        lowered = (text or "").lower()
-        if "semantic component" in lowered or "semantic_component" in lowered:
-            for img in reversed(images):
-                if "semantic_component" in (img.file_path or ""):
-                    return img
-        if "semantic container" in lowered or "semantic_container" in lowered:
-            for img in reversed(images):
-                if "semantic_container" in (img.file_path or ""):
-                    return img
-        if "semantic system" in lowered or "semantic_system_context" in lowered:
-            for img in reversed(images):
-                if "semantic_system_context" in (img.file_path or ""):
-                    return img
-        return images[-1] if images else None
-
-    if _looks_like_color_request(message):
-        target_img = _select_image_by_hint(message)
-        if target_img and getattr(target_img, "ir_id", None):
-            plan_result["intent"] = "edit_image"
-            plan_result["target_image_id"] = str(target_img.id)
-            plan_result["target_diagram_type"] = _infer_diagram_type(target_img.file_path)
-            plan_result["instructions"] = message
-            plan_result["requires_regeneration"] = False
-            plan_result["plan"] = [
+            last_image_id = llm_result["image"].id
+            exec_record = _record_plan_execution(
+                db,
+                plan_record,
+                step_index,
+                "llm.diagram",
                 {
-                    "tool": "edit_diagram_ir",
-                    "arguments": {"instruction": message, "ir_id": str(target_img.ir_id)},
-                }
-            ]
-            intent = "edit_image"
-    result: dict = {}
-
-    diagram_count = plan_result.get("diagram_count")
-    planned_diagrams = plan_result.get("diagrams") or []
-    planned_types = [d.get("type") for d in planned_diagrams if isinstance(d, dict) and d.get("type")]
-
-    tool_results: list[dict] = []
-    created_image: Image | None = None
-    assistant_messages: list[Message] = []
-    for step in plan_result.get("plan", []) or []:
-        tool_name = step.get("tool")
-        args = dict(step.get("arguments", {}) or {})
+                    "format": llm_result["format"],
+                    "diagram_type": llm_result["diagram_type"],
+                    "rendering_service": rendering_service or f"llm_{llm_result['format']}",
+                },
+                {"image_id": str(llm_result["image"].id)},
+                llm_result["audit_id"],
+                duration_ms,
+            )
+            tool_results.append({
+                "tool": "llm.diagram",
+                "rendering_service": rendering_service or f"llm_{llm_result['format']}",
+                "output": {"image_id": str(llm_result["image"].id), "audit_id": llm_result["audit_id"]},
+                "audit_id": llm_result["audit_id"],
+                "execution_id": str(exec_record.id),
+            })
+            continue
         if not tool_name:
             continue
-
-        if tool_name in {"generate_plantuml", "generate_diagram", "generate_multiple_diagrams", "edit_diagram_via_semantic_understanding", "edit_diagram_ir"}:
-            if "output_name" not in args:
-                args["output_name"] = f"{session.id}_{_next_version(db, session.id)}"
-
-        if tool_name == "generate_multiple_diagrams":
-            if "diagram_types" not in args and planned_types:
-                if isinstance(diagram_count, int) and diagram_count > 0:
-                    args["diagram_types"] = planned_types[:diagram_count]
-                else:
-                    args["diagram_types"] = planned_types
-            if "diagram_types" not in args and isinstance(diagram_count, int) and diagram_count > 0:
-                latest_plan = get_latest_plan(db, session.id)
-                if latest_plan and isinstance(latest_plan.data, dict):
-                    types = latest_plan.data.get("diagram_views") or []
-                    args["diagram_types"] = list(types)[:diagram_count]
-
-        if tool_name in {"generate_plantuml", "render_image_from_plan", "explain_architecture", "generate_sequence_from_architecture", "generate_plantuml_sequence"}:
-            if not args.get("architecture_plan"):
-                latest_plan = get_latest_plan(db, session.id)
-                if latest_plan:
-                    args["architecture_plan"] = latest_plan.data
-                else:
-                    response_text = "I need an architecture plan to do that. Please generate from input first."
-                    break
-
-        if tool_name == "generate_sequence_from_architecture":
-            if "github_url" not in args and session.source_repo:
-                args["github_url"] = session.source_repo
-            if "user_message" not in args:
-                args["user_message"] = message
-            if "output_name" not in args:
-                args["output_name"] = f"{session.id}_sequence_{_next_version(db, session.id)}"
-        
-        if tool_name == "generate_plantuml_sequence":
-            if "output_name" not in args:
-                args["output_name"] = f"{session.id}_sequence_{_next_version(db, session.id)}"
-
-        if tool_name == "generate_architecture_plan" and "content" not in args:
-            if session.input_text:
-                args["content"] = session.input_text
+        args, prep_error = _prepare_tool_arguments(db, session, plan_result, tool_name, step.get("arguments", {}), message)
+        if prep_error:
+            response_text = prep_error
+            error_occurred = True
+            break
+        if args.get("diagramId") == LATEST_IMAGE_PLACEHOLDER:
+            if last_image_id:
+                args["diagramId"] = str(last_image_id)
             else:
-                response_text = "I need the original input to generate the architecture plan."
+                response_text = "I need an existing diagram before I can apply that styling."
+                error_occurred = True
                 break
 
-        if tool_name == "edit_existing_image" and "image_id" not in args:
-            if images:
-                args["image_id"] = str(images[-1].id)
-            else:
-                response_text = "I need an image to edit. Generate a diagram first."
-                break
-
-        if tool_name in {"render_image_from_plan", "edit_existing_image", "edit_diagram_ir"} and "session_id" not in args:
-            args["session_id"] = str(session.id)
-
+        exec_context = {
+            "db": db,
+            "session": session,
+            "session_id": str(session.id),
+            "user_message": message,
+            "plan_id": str(plan_record.id),
+        }
+        logger.info(
+            "Executing MCP tool",
+            extra={
+                "session_id": str(session.id),
+                "plan_id": plan_id_value,
+                "tool": tool_name,
+                "step_index": step_index,
+            },
+        )
+        start = time.perf_counter()
         try:
-            tool_output = mcp_registry.execute(
+            tool_output = mcp_registry.execute(tool_name, args, context=exec_context)
+        except Exception as exc:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            logger.exception(
+                "MCP tool failed",
+                extra={"session_id": str(session.id), "plan_id": plan_id_value, "tool": tool_name},
+            )
+            _record_plan_execution(
+                db,
+                plan_record,
+                step_index,
                 tool_name,
                 args,
-                context={"db": db, "session": session, "session_id": str(session.id)},
+                {"error": str(exc)},
+                None,
+                duration_ms,
             )
-        except Exception as exc:
             response_text = f"Tool '{tool_name}' failed: {exc}"
+            error_occurred = True
             break
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        audit_id = tool_output.get("audit_id") or tool_output.get("auditId")
+        logger.info(
+            "MCP tool completed",
+            extra={
+                "session_id": str(session.id),
+                "plan_id": plan_id_value,
+                "tool": tool_name,
+                "audit_id": audit_id,
+                "duration_ms": duration_ms,
+            },
+        )
+        _record_plan_execution(db, plan_record, step_index, tool_name, args, tool_output, audit_id, duration_ms)
         tool_results.append({"tool": tool_name, "output": tool_output})
 
         if tool_name == "generate_architecture_plan":
             plan_data = tool_output.get("architecture_plan")
             if plan_data:
-                db.add(ArchitecturePlanRecord(session_id=session.id, data=plan_data))
-        elif tool_name in {"generate_plantuml", "generate_diagram", "generate_multiple_diagrams", "edit_diagram_via_semantic_understanding", "edit_diagram_ir", "generate_sequence_from_architecture", "generate_plantuml_sequence"}:
+                latest_record = ArchitecturePlanRecord(session_id=session.id, data=plan_data)
+                db.add(latest_record)
+                db.flush()
+                context_cache["latest_plan"] = latest_record
+        elif tool_name in {
+            "generate_plantuml",
+            "generate_diagram",
+            "generate_multiple_diagrams",
+            "edit_diagram_via_semantic_understanding",
+            "edit_diagram_ir",
+            "generate_sequence_from_architecture",
+            "generate_plantuml_sequence",
+        }:
             for entry in tool_output.get("ir_entries", []) or []:
                 diagram_type = entry.get("diagram_type") or "diagram"
                 svg_text = entry.get("svg")
@@ -626,6 +923,19 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
                 parent_ir_id = entry.get("parent_ir_id")
                 if not svg_text:
                     continue
+                semantic_intent = None
+                try:
+                    semantic_intent, _ = generate_semantic_intent(svg_text, message)
+                except Exception:
+                    logger.exception(
+                        "Failed to derive semantic intent",
+                        extra={
+                            "session_id": str(session.id),
+                            "plan_id": plan_id_value,
+                            "tool": tool_name,
+                            "diagram_type": diagram_type,
+                        },
+                    )
                 ir_version = _create_ir_version(
                     db,
                     session,
@@ -633,6 +943,8 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
                     svg_text=svg_text,
                     reason=entry.get("reason") or intent,
                     parent_ir_id=_parse_uuid(parent_ir_id) if parent_ir_id else None,
+                    ir_json={"intent": diagram_type},
+                    semantic_intent=semantic_intent,
                 )
                 if not svg_file:
                     svg_file = render_ir_svg(svg_text, f"{session.id}_{diagram_type}_{ir_version.version}")
@@ -657,6 +969,7 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
                         ir_id=ir_version.id,
                     )
                 )
+                last_image_id = created_image.id
         elif tool_name in {"render_image_from_plan", "edit_existing_image"}:
             image_file = tool_output.get("image_file")
             if image_file:
@@ -680,62 +993,77 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
                         diagram_type=diagram_type,
                     )
                 )
-        elif tool_name == "explain_architecture":
-            result["explanation"] = tool_output.get("answer")
-
-    if tool_results:
-        if assistant_messages:
-            # Created image messages, provide informative text
-            diagram_types = set(msg.diagram_type for msg in assistant_messages if msg.diagram_type)
-            if diagram_types:
-                response_text = f"Generated {', '.join(sorted(diagram_types))} diagram(s)."
-            else:
-                response_text = ""
-        else:
-            response_text = result.get("explanation") or "Done."
-    elif intent == "edit_image":
-        latest_ir = list_ir_versions(db, session.id)[-1] if list_ir_versions(db, session.id) else None
-        if latest_ir:
-            edited_svg = edit_ir_svg(latest_ir.svg_text, plan_result.get("instructions") or message)
-            ir_version = _create_ir_version(
-                db,
-                session,
-                diagram_type=latest_ir.diagram_type,
-                svg_text=edited_svg,
-                reason="edit",
-                parent_ir_id=latest_ir.id,
-            )
-            svg_file = render_ir_svg(edited_svg, f"{session.id}_{latest_ir.diagram_type}_{ir_version.version}")
-            created_image = _create_image(
-                db,
-                session,
-                file_path=svg_file,
-                prompt=None,
-                reason="edit",
-                ir_id=ir_version.id,
-            )
-            response_text = "" if assistant_messages else "Applied edit to the diagram."
-            assistant_messages.append(
-                Message(
-                    session_id=session.id,
-                    role="assistant",
-                    content="",
-                    intent=intent,
-                    image_id=created_image.id,
-                    message_type="image",
-                    image_version=created_image.version,
-                    diagram_type=latest_ir.diagram_type,
+                last_image_id = created_image.id
+        elif tool_name == "styling.apply_post_svg":
+            svg_after = tool_output.get("svgAfter") or tool_output.get("svg")
+            diagram_id_value = args.get("diagramId")
+            image_record = None
+            if diagram_id_value:
+                try:
+                    image_record = db.get(Image, _parse_uuid(diagram_id_value))
+                except (TypeError, ValueError):
+                    image_record = None
+            if svg_after and image_record:
+                diagram_type = _infer_diagram_type(image_record.file_path)
+                parent_ir = db.get(DiagramIR, image_record.ir_id) if getattr(image_record, "ir_id", None) else None
+                inherited_ir_json = dict(parent_ir.ir_json) if parent_ir and parent_ir.ir_json else None
+                semantic_intent = None
+                intent_payload = None
+                if parent_ir and parent_ir.ir_json:
+                    intent_payload = parent_ir.ir_json.get("aesthetic_intent")
+                if intent_payload:
+                    try:
+                        semantic_intent = SemanticAestheticIR.from_dict(intent_payload)
+                    except Exception:
+                        logger.exception(
+                            "Failed to hydrate semantic intent from parent IR",
+                            extra={"session_id": str(session.id), "diagram_type": diagram_type},
+                        )
+                ir_version = _create_ir_version(
+                    db,
+                    session,
+                    diagram_type=diagram_type,
+                    svg_text=svg_after,
+                    reason="styling",
+                    parent_ir_id=image_record.ir_id,
+                    ir_json=inherited_ir_json,
+                    semantic_intent=semantic_intent,
+                )
+                svg_file = render_ir_svg(svg_after, f"{session.id}_{diagram_type}_{ir_version.version}")
+                styled_image = _create_image(
+                    db,
+                    session,
+                    file_path=svg_file,
+                    prompt=None,
+                    reason="styling",
+                    parent_image_id=image_record.id,
                     ir_id=ir_version.id,
                 )
-            )
-        else:
-            response_text = "I need a diagram to edit. Generate one first."
-    elif intent == "diagram_change":
+                assistant_messages.append(
+                    Message(
+                        session_id=session.id,
+                        role="assistant",
+                        content="",
+                        intent=intent,
+                        image_id=styled_image.id,
+                        message_type="image",
+                        image_version=styled_image.version,
+                        diagram_type=diagram_type,
+                        ir_id=ir_version.id,
+                    )
+                )
+                last_image_id = styled_image.id
+        elif tool_name == "explain_architecture":
+            response_text = tool_output.get("answer") or ""
+            result_payload["explanation"] = response_text
+
+    if not error_occurred:
+        plan_record.executed = True
+
+    if not tool_results and intent == "diagram_change":
         target_type = plan_result.get("target_diagram_type")
         ir_versions = list_ir_versions(db, session.id)
-        latest_by_type: dict[str, DiagramIR] = {}
-        for ir in ir_versions:
-            latest_by_type[ir.diagram_type] = ir
+        latest_by_type: dict[str, DiagramIR] = {ir.diagram_type: ir for ir in ir_versions}
         if target_type in latest_by_type:
             ir_version = latest_by_type[target_type]
             svg_file = render_ir_svg(ir_version.svg_text, f"{session.id}_{target_type}_{ir_version.version}")
@@ -747,8 +1075,6 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
                 reason=f"diagram change: {target_type}",
                 ir_id=ir_version.id,
             )
-            response_text = ""
-            result = {"diagram_type": target_type}
             assistant_messages.append(
                 Message(
                     session_id=session.id,
@@ -762,37 +1088,29 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
                     ir_id=ir_version.id,
                 )
             )
+            result_payload["diagram_type"] = target_type
+            response_text = ""
         elif plan_result.get("requires_regeneration"):
             if session.input_text:
                 ingest_input(db, session, files=None, text=session.input_text)
+                result_payload["diagram_type"] = target_type
                 response_text = "Regenerated architecture to include requested diagram."
-                result = {"diagram_type": target_type}
             else:
                 response_text = "I need the original input (file or text) to regenerate. Please re-upload or paste it."
-                result = {}
         else:
-            response_text = "Requested diagram type not available."
-            result = {}
-    elif intent == "regenerate":
-        if session.input_text:
-            result = ingest_input(db, session, files=None, text=session.input_text)
-            response_text = "Regenerated architecture from input."
+            response_text = response_text or "Requested diagram type not available."
+
+    if response_text is None:
+        if assistant_messages:
+            diagram_types = sorted({msg.diagram_type for msg in assistant_messages if msg.diagram_type})
+            if diagram_types:
+                response_text = f"Generated {', '.join(diagram_types)} diagram(s)."
+            else:
+                response_text = ""
+        elif result_payload.get("explanation"):
+            response_text = result_payload.get("explanation") or ""
         else:
-            response_text = "I need the original input (file or text) to regenerate. Please re-upload or paste it."
-            result = {}
-    elif intent == "explain":
-        response_text = explain_architecture(plan.data if plan else {}, message)
-        result = {}
-    elif intent == "generate_sequence":
-        # Should have been handled by tool execution loop
-        if not tool_results:
-            response_text = "Failed to generate sequence diagram. Please check if architecture plan exists."
-        else:
-            response_text = ""
-        result = {}
-    else:
-        response_text = "Can you clarify what change or explanation you want?"
-        result = {}
+            response_text = plan_result.get("instructions") or "Done."
 
     if response_text:
         db.add(
@@ -807,16 +1125,36 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
                 diagram_type=None if assistant_messages else (_infer_diagram_type(created_image.file_path) if created_image else None),
             )
         )
+
     for msg in assistant_messages:
         db.add(msg)
+
     db.commit()
+
     return {
         "intent": intent,
         "response": response_text,
-        "result": result,
+        "result": result_payload,
         "plan": plan_result,
+        "plan_id": str(plan_record.id),
         "tool_results": tool_results,
     }
+
+
+def get_plan_with_history(db: DbSession, plan_id: UUID | str) -> tuple[PlanRecord | None, list[PlanExecution]]:
+    try:
+        plan_uuid = _parse_uuid(plan_id)
+    except (TypeError, ValueError):
+        return None, []
+    plan = db.get(PlanRecord, plan_uuid)
+    if not plan:
+        return None, []
+    executions = list(
+        db.execute(
+            select(PlanExecution).where(PlanExecution.plan_id == plan_uuid).order_by(PlanExecution.created_at)
+        ).scalars()
+    )
+    return plan, executions
 
 
 def _create_image(
@@ -863,6 +1201,7 @@ def _create_ir_version(
     parent_ir_id: UUID | None = None,
     ir_json: dict | None = None,
     plantuml_text: str | None = None,
+    semantic_intent: SemanticAestheticIR | None = None,
 ) -> DiagramIR:
     last = db.execute(
         select(DiagramIR).where(DiagramIR.session_id == session.id).order_by(DiagramIR.version.desc())
@@ -871,6 +1210,14 @@ def _create_ir_version(
         logging.getLogger(__name__).warning("Creating IR version with empty svg_text for session %s diagram %s", session.id, diagram_type)
         svg_text = ""
 
+    payload = dict(ir_json or {})
+    if semantic_intent:
+        try:
+            payload["aesthetic_intent"] = semantic_intent.to_dict()
+        except Exception:
+            logging.getLogger(__name__).exception("Failed to serialize semantic intent for diagram %s", diagram_type)
+    payload = payload or None
+
     ir_version = DiagramIR(
         session_id=session.id,
         diagram_type=diagram_type,
@@ -878,7 +1225,7 @@ def _create_ir_version(
         parent_ir_id=parent_ir_id,
         reason=reason,
         svg_text=svg_text,
-        ir_json=ir_json,
+        ir_json=payload,
         plantuml_text=plantuml_text,
     )
     db.add(ir_version)

@@ -5,9 +5,34 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_FILE="/tmp/archviz_server.log"
 UI_LOG_FILE="/tmp/archviz_ui.log"
 UI_MODE="dev"
+RENDERER_COMPOSE_FILE="$ROOT_DIR/docker-compose.renderers.yml"
 
 pkill -f "src.app|uvicorn|start_dev.sh" || true
 pkill -f "vite" || true
+
+start_renderer_services() {
+	if [[ ! -f "$RENDERER_COMPOSE_FILE" ]]; then
+		return 0
+	fi
+	if ! command -v docker >/dev/null 2>&1; then
+		echo "Docker is not installed; skipping renderer containers." >&2
+		return 0
+	fi
+	local compose_cmd
+	if docker compose version >/dev/null 2>&1; then
+		compose_cmd=(docker compose)
+	elif command -v docker-compose >/dev/null 2>&1; then
+		compose_cmd=(docker-compose)
+	else
+		echo "Docker Compose is not available; skipping renderer containers." >&2
+		return 0
+	fi
+
+	echo "Bringing up renderer services (mermaid, structurizr)..."
+	"${compose_cmd[@]}" -f "$RENDERER_COMPOSE_FILE" up -d --build
+}
+
+start_renderer_services
 
 if [[ -f "$ROOT_DIR/ui/package.json" ]]; then
 	if [[ -f "$ROOT_DIR/ui/package-lock.json" ]]; then

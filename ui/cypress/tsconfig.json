@@ -1,0 +1,13 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "CommonJS",
+        "moduleResolution": "Node",
+        "types": ["cypress"],
+        "lib": ["ES2022", "DOM"],
+        "esModuleInterop": true,
+        "strict": false,
+        "skipLibCheck": true
+    },
+    "include": ["../cypress.config.ts", "./**/*.ts"]
+}

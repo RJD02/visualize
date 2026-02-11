@@ -5,7 +5,6 @@ import json
 import hashlib
 from typing import Any, Dict, List, Optional
 
-from openai import OpenAI
 
 from src.animation.svg_structural_analyzer import SVGStructuralGraph, analyze_svg
 from src.animation.animation_plan_schema import (
@@ -19,6 +18,7 @@ from src.animation.animation_plan_schema import (
 )
 from src.mcp.registry import MCPTool, mcp_registry
 from src.utils.config import settings
+from src.utils.openai_client import get_openai_client
 
 
 ANIMATION_INTELLIGENCE_PROMPT = """You are an expert animation designer specializing in SVG diagram animations.
@@ -115,7 +115,7 @@ def _call_llm(prompt: str) -> Optional[str]:
         return None
     
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
+        client = get_openai_client()
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[

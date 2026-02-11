@@ -5,9 +5,9 @@ import json
 import re
 from typing import Dict
 
-from openai import OpenAI
 
 from src.utils.config import settings
+from src.utils.openai_client import get_openai_client
 
 INTENT_SYSTEM = (
     "You are a router. Classify the user request into one intent: "
@@ -19,7 +19,7 @@ INTENT_SYSTEM = (
 def detect_intent(message: str) -> Dict[str, object]:
     if not settings.openai_api_key:
         return {"intent": "clarify", "target_image_version": None, "notes": "Missing API key"}
-    client = OpenAI(api_key=settings.openai_api_key)
+    client = get_openai_client()
     response = client.chat.completions.create(
         model=settings.openai_model,
         messages=[
@@ -41,7 +41,7 @@ def detect_intent(message: str) -> Dict[str, object]:
 def explain_architecture(plan: dict, message: str) -> str:
     if not settings.openai_api_key:
         return "Missing OPENAI_API_KEY."
-    client = OpenAI(api_key=settings.openai_api_key)
+    client = get_openai_client()
     prompt = (
         "Explain the architecture based on this plan JSON. "
         "Answer the user's question concisely.\n\n"
