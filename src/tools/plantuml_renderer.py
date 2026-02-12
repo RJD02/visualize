@@ -7,7 +7,7 @@ from uuid import UUID
 
 from src.models.architecture_plan import ArchitecturePlan
 from src.renderer import render_plantuml, render_plantuml_svg
-from src.renderers.mermaid_renderer import render_mermaid_svg
+from src.renderers.mermaid_renderer import render_mermaid_svg_with_command
 from src.services.styling_audit_service import record_styling_audit
 from src.tools.diagram_validator import validate_and_sanitize
 from src.utils.config import settings
@@ -44,11 +44,27 @@ def _diagram_header(plan: ArchitecturePlan, layout_override: str | None = None) 
     return f"@startuml\n{direction}\n"
 
 
-def _zone_block(title: str, items: List[str], alias: str, aliases: Dict[str, str]) -> str:
+def _element_for_zone(zone_name: str) -> str:
+    mapping = {
+        "clients": "actor",
+        "edge": "boundary",
+        "core_services": "component",
+        "external_services": "cloud",
+        "data_stores": "database",
+    }
+    return mapping.get(zone_name, "component")
+
+
+def _render_element(element: str, label: str, alias: str) -> str:
+    return f"{element} \"{label}\" as {alias}"
+
+
+def _zone_block(title: str, items: List[str], alias: str, aliases: Dict[str, str], zone_name: str) -> str:
     lines = [f"package \"{title}\" as {alias} {{"]
+    element = _element_for_zone(zone_name)
     for item in items:
         item_alias = aliases[item]
-        lines.append(f"  component \"{item}\" as {item_alias}")
+        lines.append(f"  {_render_element(element, item, item_alias)}")
     lines.append("}")
     return "\n".join(lines)
 
@@ -92,11 +108,11 @@ def generate_plantuml_from_plan(
     zone_order = overrides.get("zone_order")
     diagrams = []
     zone_map = {
-        "clients": plan.zones.clients,
-        "edge": plan.zones.edge,
-        "core_services": plan.zones.core_services,
-        "external_services": plan.zones.external_services,
-        "data_stores": plan.zones.data_stores,
+        "clients": list(plan.zones.clients),
+        "edge": list(plan.zones.edge),
+        "core_services": list(plan.zones.core_services),
+        "external_services": list(plan.zones.external_services),
+        "data_stores": list(plan.zones.data_stores),
     }
     default_order = ["clients", "edge", "core_services", "external_services", "data_stores"]
     if isinstance(zone_order, list) and zone_order:
@@ -108,6 +124,21 @@ def generate_plantuml_from_plan(
     else:
         zone_order = default_order
 
+    requested_views: List[str]
+    if diagram_types:
+        requested_views = [view.strip() for view in diagram_types if view]
+    else:
+        requested_views = list(plan.diagram_views)
+    if not requested_views:
+        requested_views = [_DEFAULT_DIAGRAM_TYPE]
+
+    inject_defaults = any(view in {"system_context", "container", "component"} for view in requested_views)
+    if inject_defaults and zone_map.get("core_services"):
+        if not zone_map.get("clients"):
+            zone_map["clients"] = ["Client"]
+        if not zone_map.get("edge"):
+            zone_map["edge"] = ["Gateway"]
+
     labels: List[str] = []
     for items in zone_map.values():
         labels.extend(list(items))
@@ -118,14 +149,6 @@ def generate_plantuml_from_plan(
     for label in labels:
         if label not in aliases:
             aliases[label] = _alias_for(label, used)
-
-    requested_views: List[str]
-    if diagram_types:
-        requested_views = [view.strip() for view in diagram_types if view]
-    else:
-        requested_views = list(plan.diagram_views)
-    if not requested_views:
-        requested_views = [_DEFAULT_DIAGRAM_TYPE]
 
     for view in requested_views:
         header = _diagram_header(plan, layout_override=layout_override)
@@ -149,7 +172,7 @@ def generate_plantuml_from_plan(
                 items = items_map.get(zone_name, [])
                 if items:
                     alias = f"zone_{zone_name}"
-                    parts.append(_zone_block(zone_name, items, alias, aliases))
+                    parts.append(_zone_block(zone_name, items, alias, aliases, zone_name))
                     zone_aliases.append(alias)
             for idx in range(len(zone_aliases) - 1):
                 parts.append(f"{zone_aliases[idx]} -[hidden]-> {zone_aliases[idx + 1]}")
@@ -159,7 +182,9 @@ def generate_plantuml_from_plan(
                 flat.extend(items_map.get(zone, []))
             for item in flat:
                 item_alias = aliases[item]
-                parts.append(f"component \"{item}\" as {item_alias}")
+                zone_name = node_to_zone.get(item, "core_services")
+                element = _element_for_zone(zone_name)
+                parts.append(_render_element(element, item, item_alias))
         # relationships are not filtered by view currently; they connect existing items
         parts.extend(_relationships(plan, aliases))
         parts.append("@enduml")
@@ -202,7 +227,7 @@ def render_diagrams(
                 fmt = fmt or "plantuml"
 
         if llm_text:
-            image_path, sanitized_text, warnings, resolved_fmt = _render_llm_diagram(
+            image_path, sanitized_text, warnings, resolved_fmt, render_command = _render_llm_diagram(
                 llm_text,
                 fmt,
                 file_name,
@@ -218,6 +243,7 @@ def render_diagrams(
                 llm_text=llm_text,
                 sanitized_text=sanitized_text,
                 warnings=warnings,
+                render_command=render_command,
             )
             continue
 
@@ -257,7 +283,7 @@ def _render_llm_diagram(
     file_name: str,
     output_dir: Path,
     output_format: str,
-) -> tuple[str, str, List[str], str]:
+) -> tuple[str, str, List[str], str, str | None]:
     fmt_token = (diagram_format or "plantuml").strip().lower()
     if fmt_token.startswith("plant"):
         fmt = "plantuml"
@@ -276,15 +302,15 @@ def _render_llm_diagram(
         else:
             image_path = render_plantuml(sanitized, file_name)
         (output_dir / f"{file_name}.puml").write_text(sanitized, encoding="utf-8")
-        return str(image_path), sanitized, warnings, fmt
+        return str(image_path), sanitized, warnings, fmt, None
 
     if output_format != "svg":
         raise ValueError("Mermaid diagrams only support SVG output")
-    svg_text = render_mermaid_svg(sanitized)
+    svg_text, render_command = render_mermaid_svg_with_command(sanitized)
     svg_path = output_dir / f"{file_name}.svg"
     svg_path.write_text(svg_text, encoding="utf-8")
     (output_dir / f"{file_name}.mmd").write_text(sanitized, encoding="utf-8")
-    return str(svg_path), sanitized, warnings, fmt
+    return str(svg_path), sanitized, warnings, fmt, render_command
 
 
 def _maybe_record_llm_audit(
@@ -296,6 +322,7 @@ def _maybe_record_llm_audit(
     llm_text: str,
     sanitized_text: str,
     warnings: List[str],
+    render_command: str | None = None,
 ) -> None:
     if not audit_context:
         return
@@ -304,6 +331,9 @@ def _maybe_record_llm_audit(
     plan_id = diagram_plan_id or audit_context.get("plan_id")
     if not (db and session_id and plan_id):
         return
+    execution_steps = [f"Validated {llm_format} diagram before rendering."]
+    if render_command:
+        execution_steps.append(f"Rendered via docker: {render_command}")
     record_styling_audit(
         db,
         session_id=session_id,
@@ -316,7 +346,7 @@ def _maybe_record_llm_audit(
         sanitized_diagram=sanitized_text,
         extracted_intent=None,
         styling_plan=None,
-        execution_steps=[f"Validated {llm_format} diagram before rendering."],
+        execution_steps=execution_steps,
         agent_reasoning="render_diagrams defaulted to llm_diagram input.",
         mode="pre-svg",
         renderer_input_before=llm_text,

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["diagram_id", "action"],
+  "properties": {
+    "diagram_id": {"type": "string"},
+    "feedback_id": {"type": "string"},
+    "block_id": {"type": ["string", "null"]},
+    "action": {"type": "string"},
+    "payload": {"type": "object"},
+    "author": {"type": "string"},
+    "timestamp": {"type": ["integer", "number"]}
+  },
+  "additionalProperties": true
+}

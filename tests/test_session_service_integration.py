@@ -5,6 +5,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.db import Base
+from src.mcp.registry import mcp_registry
+from src.mcp.tools import register_mcp_tools
 from src.services import session_service
 
 
@@ -102,6 +104,40 @@ class StylingPlanner:
         }
 
 
+class GenerateAndStylePlanner:
+    def plan(self, message, state, tools):
+        plan_id = str(uuid4())
+        return {
+            "plan_id": plan_id,
+            "intent": "regenerate",
+            "diagram_count": 2,
+            "diagrams": [
+                {"type": "system_context", "reason": "generate"},
+                {"type": "component", "reason": "generate"},
+            ],
+            "target_image_id": None,
+            "target_diagram_type": "system_context",
+            "instructions": message,
+            "requires_regeneration": True,
+            "plan": [
+                {
+                    "tool": "generate_multiple_diagrams",
+                    "arguments": {"diagram_types": ["system_context", "component"]},
+                },
+                {
+                    "tool": "styling.apply_post_svg",
+                    "arguments": {
+                        "diagramId": session_service.LATEST_IMAGE_PLACEHOLDER,
+                        "userPrompt": message,
+                        "stylingIntent": message,
+                        "mode": "post-svg",
+                    },
+                },
+            ],
+            "metadata": {"source": "test"},
+        }
+
+
 def test_ingest_and_handle_message(monkeypatch):
     engine = create_engine("sqlite+pysqlite:///:memory:")
     SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
@@ -126,6 +162,28 @@ def test_ingest_and_handle_message(monkeypatch):
         reply = session_service.handle_message(db, session, "show me context")
         assert reply["intent"] == "diagram_change"
         assert reply["response"] == ""
+
+
+def test_ingest_input_attaches_enriched_ir(monkeypatch):
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    monkeypatch.setattr(session_service, "ADKWorkflow", FakeWorkflow)
+
+    with SessionLocal() as db:
+        session = session_service.create_session(db)
+        session_service.ingest_input(db, session, files=None, text="hello")
+
+        ir_versions = session_service.list_ir_versions(db, session.id)
+        assert ir_versions, "expected IR versions to be recorded"
+
+        for ir in ir_versions:
+            payload = ir.ir_json or {}
+            enriched = payload.get("enriched_ir")
+            assert enriched is not None, "missing enriched_ir entry"
+            assert enriched.get("diagram_type") == ir.diagram_type
+            assert enriched.get("nodes"), "enriched IR should include nodes"
 
 
 def test_styling_message_generates_new_image(monkeypatch):
@@ -156,3 +214,54 @@ def test_styling_message_generates_new_image(monkeypatch):
 
         messages = session_service.list_messages(db, session.id)
         assert any(m.image_id == styled_image.id for m in messages if m.message_type == "image")
+
+
+def test_generate_multiple_diagrams_are_all_styled(monkeypatch, tmp_path):
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    monkeypatch.setattr(session_service, "ADKWorkflow", FakeWorkflow)
+    monkeypatch.setattr(session_service, "ConversationPlannerAgent", GenerateAndStylePlanner)
+
+    def fake_generate(plan, overrides=None, diagram_types=None):
+        types = diagram_types or ["system_context", "component"]
+        return [
+            {"type": dtype, "plantuml": f"@startuml\ncomponent {dtype}\n@enduml"}
+            for dtype in types
+        ]
+
+    def fake_render(diagrams, output_name, output_format="svg", audit_context=None):
+        files = []
+        for idx, diagram in enumerate(diagrams):
+            path = tmp_path / f"{output_name}_{diagram['type']}_{idx}.svg"
+            svg = (
+                '<svg xmlns="http://www.w3.org/2000/svg">'
+                "<rect width=\"240\" height=\"80\" />"
+                f"<text id=\"{diagram['type']}_label\" x=\"12\" y=\"24\">{diagram['type']}</text>"
+                "</svg>"
+            )
+            path.write_text(svg, encoding="utf-8")
+            files.append(str(path))
+        return files
+
+    monkeypatch.setattr("src.tools.plantuml_renderer.generate_plantuml_from_plan", fake_generate)
+    monkeypatch.setattr("src.tools.plantuml_renderer.render_diagrams", fake_render)
+    monkeypatch.setattr(mcp_registry, "_tools", {})
+    register_mcp_tools(mcp_registry)
+
+    with SessionLocal() as db:
+        session = session_service.create_session(db)
+        session_service.ingest_input(db, session, files=None, text="seed")
+        prompt = "https://github.com/RJD02/job-portal-go\nGenerate black blocks with white text and a pinkish blue background."
+        reply = session_service.handle_message(db, session, prompt)
+        assert reply["intent"] == "regenerate"
+
+        ir_versions = session_service.list_ir_versions(db, session.id)
+        styled_versions = [ir for ir in ir_versions if ir.reason == "styling"]
+        assert len(styled_versions) >= 2
+        styled_types = {ir.diagram_type for ir in styled_versions}
+        assert "component" in styled_types
+        assert any(kind in styled_types for kind in {"system_context", "context"})
+        for ir in styled_versions:
+            assert "#F8F9FA" in ir.svg_text, f"Expected white text fill for {ir.diagram_type}"

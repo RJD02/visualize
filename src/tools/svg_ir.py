@@ -285,6 +285,7 @@ def ir_to_svg(ir: IRModel) -> str:
             "id": node.node_id,
             "data-kind": "node",
             "data-role": node.role,
+            "data-block-id": node.node_id,
         })
         rect = ET.SubElement(group, "rect", {
             "id": f"{node.node_id}_rect",
@@ -402,12 +403,30 @@ def edit_ir_svg(svg_text: str, instruction: str) -> str:
             zone_order.insert(idx, second)
             zone_order.insert(idx + 1, first)
 
+    def _coerce_node(raw: dict) -> IRNode:
+        data = dict(raw or {})
+        if "node_id" not in data and "id" in data:
+            data["node_id"] = data.get("id")
+        allowed = {"node_id", "label", "role", "zone"}
+        cleaned = {k: v for k, v in data.items() if k in allowed}
+        return IRNode(**cleaned)
+
+    def _coerce_edge(raw: dict) -> IREdge:
+        data = dict(raw or {})
+        if "from_id" not in data and "from" in data:
+            data["from_id"] = data.get("from")
+        if "to_id" not in data and "to" in data:
+            data["to_id"] = data.get("to")
+        allowed = {"edge_id", "from_id", "to_id", "rel_type"}
+        cleaned = {k: v for k, v in data.items() if k in allowed}
+        return IREdge(**cleaned)
+
     ir = IRModel(
         diagram_type=payload.get("diagram_type", "diagram"),
         layout=layout or "top-down",
         zone_order=zone_order,
-        nodes=[IRNode(**node) for node in payload.get("nodes", [])],
-        edges=[IREdge(**edge) for edge in payload.get("edges", [])],
+        nodes=[_coerce_node(node) for node in payload.get("nodes", [])],
+        edges=[_coerce_edge(edge) for edge in payload.get("edges", [])],
     )
     return ir_to_svg(ir)
 

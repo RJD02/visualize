@@ -30,7 +30,7 @@ from src.tools.plantuml_renderer import generate_plantuml_from_plan, render_diag
 from src.tools.plantuml_sequence import generate_plantuml_sequence_from_architecture
 from src.tools.mermaid_renderer import render_llm_mermaid
 from src.tools.sdxl_renderer import run_sdxl, run_sdxl_edit
-from src.tools.svg_ir import generate_svg_from_plan, render_ir_svg, edit_ir_svg
+from src.tools.svg_ir import build_ir_from_plan, generate_svg_from_plan, render_ir_svg, edit_ir_svg
 from src.tools.text_extractor import extract_text
 from src.utils.config import settings
 from src.utils.file_utils import read_text_file
@@ -232,6 +232,204 @@ def _infer_diagram_type_from_path(path: str | None) -> str | None:
         if candidate in name:
             return candidate
     return None
+
+
+_ROLE_KIND_MAP = {
+    "client": "person",
+    "actor": "person",
+    "gateway": "container",
+    "service": "component",
+    "external": "system",
+    "db": "database",
+    "data_store": "database",
+}
+
+_ROLE_BY_ZONE = {
+    "clients": "actor",
+    "edge": "gateway",
+    "core_services": "service",
+    "external_services": "external",
+    "data_stores": "data_store",
+}
+
+_ACTOR_LABEL_HINTS = ("captain", "operator", "pilot", "user", "crew", "human")
+_EXTERNAL_LABEL_HINTS = ("ship", "boat", "vessel")
+
+
+def _slug(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_]+", "_", (value or "").strip().lower())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    return cleaned or "item"
+
+
+_MERMAID_IR_PROMPT = """You are a diagram translation engine.
+
+Task:
+- Convert the provided renderer-agnostic IR into a Mermaid flowchart diagram.
+
+Constraints:
+- Output ONLY Mermaid syntax, no prose, no markdown fences.
+- Use flowchart syntax (graph/flowchart) with the provided direction.
+- Preserve all nodes and edges from the IR.
+- Use concise labels, but do not remove semantic meaning.
+- Use human/actor nodes when kind == person.
+- Use database shapes for kind == database.
+- Use double-circle for kind == system/external.
+- Avoid Mermaid init blocks unless explicitly instructed.
+
+Context:
+- System name: {system_name}
+- Diagram type: {diagram_type}
+- Diagram kind: {diagram_kind}
+- Layout: {layout}
+- Narrative (if any): {narrative}
+- Rendering hints: {rendering_hints}
+
+Renderer IR (JSON):
+{ir_json}
+"""
+
+
+def _llm_generate_mermaid_from_ir(
+    renderer_ir: RendererIR,
+    *,
+    diagram_type: str,
+    plan: ArchitecturePlan,
+    context: Dict[str, Any] | None = None,
+) -> str:
+    if not settings.openai_api_key:
+        raise ValueError("OPENAI_API_KEY is required for LLM Mermaid generation")
+    client = get_openai_client()
+    ir_json = json.dumps(renderer_ir.to_dict(), indent=2)
+    prompt = _MERMAID_IR_PROMPT.format(
+        system_name=plan.system_name,
+        diagram_type=diagram_type,
+        diagram_kind=plan.diagram_kind or diagram_type,
+        layout=plan.visual_hints.layout,
+        narrative=plan.narrative or "",
+        rendering_hints=json.dumps(plan.rendering_hints or {}, indent=2),
+        ir_json=ir_json,
+    )
+    response = client.chat.completions.create(
+        model=settings.openai_model,
+        messages=[
+            {"role": "system", "content": "Return ONLY Mermaid flowchart syntax."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+    )
+    raw = (response.choices[0].message.content or "").strip()
+    return raw
+
+
+def _infer_role_from_label(label: str) -> str | None:
+    lowered = (label or "").lower()
+    if any(tok in lowered for tok in _ACTOR_LABEL_HINTS):
+        return "actor"
+    if any(tok in lowered for tok in _EXTERNAL_LABEL_HINTS):
+        return "external"
+    return None
+
+
+def _build_renderer_ir_from_plan(plan: ArchitecturePlan, diagram_type: str, overrides: Dict[str, Any] | None = None) -> RendererIR:
+    overrides = overrides or {}
+    base_ir = build_ir_from_plan(plan, diagram_type, overrides=overrides)
+    description_map: dict[tuple[str, str], str] = {}
+    for rel in plan.relationships:
+        key = (rel.from_, rel.to)
+        description_map[key] = rel.description
+
+    zone_map = {
+        "clients": list(plan.zones.clients),
+        "edge": list(plan.zones.edge),
+        "core_services": list(plan.zones.core_services),
+        "external_services": list(plan.zones.external_services),
+        "data_stores": list(plan.zones.data_stores),
+    }
+    all_labels: list[str] = []
+    for items in zone_map.values():
+        all_labels.extend(list(items))
+    for rel in plan.relationships:
+        all_labels.extend([rel.from_, rel.to])
+    seen_labels: set[str] = set()
+    nodes = []
+    groups: dict[str, list[str]] = {}
+    for label in all_labels:
+        if not label or label in seen_labels:
+            continue
+        seen_labels.add(label)
+        node_id = f"node_{_slug(label)}"
+        zone = next((z for z, items in zone_map.items() if label in items), None)
+        role = _ROLE_BY_ZONE.get(zone) if zone else _infer_role_from_label(label) or "service"
+        kind = _ROLE_KIND_MAP.get(role, "component")
+        nodes.append({"id": node_id, "label": label, "kind": kind, "group": zone or None})
+        if zone:
+            groups.setdefault(zone, []).append(node_id)
+    label_to_id: dict[str, str] = {node["label"]: node["id"] for node in nodes}
+
+    edges = []
+    diagram_kind = (plan.diagram_kind or "").lower()
+    if diagram_kind in {"story", "flow", "sequence"}:
+        for rel in plan.relationships:
+            from_id = label_to_id.get(rel.from_)
+            to_id = label_to_id.get(rel.to)
+            if not from_id or not to_id:
+                continue
+            edges.append({
+                "from": from_id,
+                "to": to_id,
+                "type": rel.type,
+                "label": rel.description or rel.type,
+            })
+    else:
+        for edge in base_ir.edges:
+            label = None
+            for rel in plan.relationships:
+                from_id = label_to_id.get(rel.from_)
+                to_id = label_to_id.get(rel.to)
+                if from_id == edge.from_id and to_id == edge.to_id:
+                    label = rel.description or rel.type
+                    break
+            if not label:
+                label = description_map.get((edge.from_id, edge.to_id))
+            edges.append({"from": edge.from_id, "to": edge.to_id, "type": edge.rel_type, "label": label or edge.rel_type})
+
+    group_list = []
+    if plan.visual_hints.group_by_zone and (plan.diagram_kind or "").lower() not in {"story", "flow", "sequence"}:
+        for zone, members in groups.items():
+            if members:
+                group_list.append({"id": zone, "label": zone, "members": members})
+
+    return RendererIR(
+        diagram_kind=plan.diagram_kind or diagram_type,
+        layout=plan.visual_hints.layout,
+        title=plan.system_name,
+        nodes=nodes,
+        edges=edges,
+        groups=group_list,
+    )
+
+
+def _resolve_render_provider(plan: ArchitecturePlan | object, diagram_type: str, rendering_service: str | None) -> str:
+    token = (rendering_service or "").lower().strip()
+    if token in {"llm_mermaid", "mermaid"}:
+        return "mermaid"
+    if token in {"llm_plantuml", "plantuml"}:
+        return "plantuml"
+    if token == "structurizr":
+        return "structurizr"
+    hint = None
+    plan_hints = getattr(plan, "rendering_hints", None)
+    if isinstance(plan_hints, dict):
+        hint = str(plan_hints.get("preferred_renderer") or "").lower().strip()
+    if hint in {"plantuml", "mermaid", "structurizr"}:
+        return hint
+    diagram_kind = str(getattr(plan, "diagram_kind", "") or "").lower().strip()
+    if diagram_kind in {"story", "flow", "sequence"}:
+        return "mermaid"
+    if diagram_type in {"sequence", "runtime", "flow", "story"}:
+        return "mermaid"
+    return "plantuml"
 
 
 def _parse_uuid(value: str | UUID | None) -> UUID:
@@ -812,7 +1010,7 @@ def tool_extract_text(context: Dict[str, Any], files: Iterable[str] | None = Non
 def tool_generate_architecture_plan(context: Dict[str, Any], content: str) -> Dict[str, Any]:
     if not content or not content.strip():
         raise ValueError("content is required")
-    plan = generate_architecture_plan_from_text(content)
+    plan = generate_architecture_plan_from_text(content, context=context)
     return {"architecture_plan": plan}
 
 
@@ -862,11 +1060,14 @@ def tool_generate_plantuml(
         if not svg_text:
             continue
         diagram_type_value = diagram.get("type") or _infer_diagram_type_from_path(file_path) or "diagram"
+        diagram_format = diagram.get("format") or (diagram.get("llm_diagram") or {}).get("format")
+        rendering_service = "mermaid" if str(diagram_format).lower().startswith("mermaid") else "plantuml"
         ir_entries.append({
             "diagram_type": diagram_type_value,
             "svg": svg_text,
             "svg_file": file_path,
             "reason": "PlantUML render",
+            "rendering_service": rendering_service,
         })
     return {"files": files, "ir_entries": ir_entries}
 
@@ -877,6 +1078,7 @@ def tool_generate_diagram(
     output_name: str,
     diagram_type: str,
     overrides: Dict[str, Any] | None = None,
+    rendering_service: str | None = None,
 ) -> Dict[str, Any]:
     if not architecture_plan:
         raise ValueError("architecture_plan is required")
@@ -884,17 +1086,48 @@ def tool_generate_diagram(
         raise ValueError("diagram_type is required")
     plan = ArchitecturePlan.parse_obj(architecture_plan)
     plan_id = context.get("plan_id")
-    diagrams = generate_plantuml_from_plan(plan, overrides=overrides, diagram_types=[diagram_type])
+    provider = _resolve_render_provider(plan, diagram_type, rendering_service)
+    audit_context = _build_render_audit_context(context)
+    if provider == "mermaid":
+        renderer_ir = _build_renderer_ir_from_plan(plan, diagram_type, overrides=overrides)
+        diagram_text = _llm_generate_mermaid_from_ir(
+            renderer_ir,
+            diagram_type=diagram_type,
+            plan=plan,
+            context=context,
+        )
+        diagrams = [{
+            "type": diagram_type,
+            "llm_diagram": {"format": "mermaid", "diagram": diagram_text, "schema_version": 1},
+            "format": "mermaid",
+            "schema_version": 1,
+        }]
+    elif provider == "structurizr":
+        renderer_ir = _build_renderer_ir_from_plan(plan, diagram_type, overrides=overrides)
+        dsl_text = ir_to_structurizr_dsl(renderer_ir)
+        svg_text = render_structurizr_svg(dsl_text)
+        svg_file = render_ir_svg(svg_text, output_name)
+        diagrams = [{
+            "type": diagram_type,
+            "svg": svg_text,
+            "svg_file": svg_file,
+            "format": "structurizr",
+        }]
+    else:
+        diagrams = generate_plantuml_from_plan(plan, overrides=overrides, diagram_types=[diagram_type])
     if plan_id:
         for entry in diagrams:
             entry.setdefault("plan_id", plan_id)
-    audit_context = _build_render_audit_context(context)
-    files = render_diagrams(
-        diagrams,
-        output_name,
-        output_format="svg",
-        audit_context=audit_context,
-    )
+    files: List[str]
+    if diagrams and diagrams[0].get("svg"):
+        files = [diagrams[0].get("svg_file")]
+    else:
+        files = render_diagrams(
+            diagrams,
+            output_name,
+            output_format="svg",
+            audit_context=audit_context,
+        )
     ir_entries: list[dict[str, Any]] = []
     for file_path, diagram in zip(files, diagrams):
         try:
@@ -909,6 +1142,7 @@ def tool_generate_diagram(
                 "svg": svg_text,
                 "svg_file": file_path,
                 "reason": overrides.get("reason") if overrides else None,
+                "rendering_service": provider,
             }
         )
     return {"ir_entries": ir_entries}
@@ -919,6 +1153,7 @@ def tool_generate_multiple_diagrams(
     architecture_plan: Dict[str, Any],
     output_name: str,
     diagram_types: List[str] | None = None,
+    rendering_service: str | None = None,
 ) -> Dict[str, Any]:
     if not architecture_plan:
         raise ValueError("architecture_plan is required")
@@ -926,30 +1161,77 @@ def tool_generate_multiple_diagrams(
     requested_types = diagram_types or list(plan.diagram_views)
     if not requested_types:
         requested_types = [settings.default_diagram_type]
-    diagrams = generate_plantuml_from_plan(plan, diagram_types=requested_types)
+    diagrams: List[Dict[str, Any]] = []
+    per_type_provider = (rendering_service or "").lower().strip() if rendering_service else "auto"
+    for diagram_type in requested_types:
+        provider = _resolve_render_provider(plan, diagram_type, per_type_provider)
+        if provider == "mermaid":
+            renderer_ir = _build_renderer_ir_from_plan(plan, diagram_type)
+            diagram_text = _llm_generate_mermaid_from_ir(
+                renderer_ir,
+                diagram_type=diagram_type,
+                plan=plan,
+                context=context,
+            )
+            diagrams.append({
+                "type": diagram_type,
+                "llm_diagram": {"format": "mermaid", "diagram": diagram_text, "schema_version": 1},
+                "format": "mermaid",
+                "schema_version": 1,
+            })
+        elif provider == "structurizr":
+            renderer_ir = _build_renderer_ir_from_plan(plan, diagram_type)
+            dsl_text = ir_to_structurizr_dsl(renderer_ir)
+            svg_text = render_structurizr_svg(dsl_text)
+            svg_file = render_ir_svg(svg_text, f"{output_name}_{diagram_type}")
+            diagrams.append({
+                "type": diagram_type,
+                "svg": svg_text,
+                "svg_file": svg_file,
+                "format": "structurizr",
+            })
+        else:
+            diagrams.extend(generate_plantuml_from_plan(plan, diagram_types=[diagram_type]))
     plan_id = context.get("plan_id")
     if plan_id:
         for entry in diagrams:
             entry.setdefault("plan_id", plan_id)
-    files = render_diagrams(
-        diagrams,
-        output_name,
-        output_format="svg",
-        audit_context=_build_render_audit_context(context),
-    )
+    struct_diagrams = [d for d in diagrams if d.get("svg")]
+    non_struct_diagrams = [d for d in diagrams if not d.get("svg")]
     entries: list[dict[str, Any]] = []
-    for file_path, diagram in zip(files, diagrams):
-        try:
-            svg_text = read_text_file(file_path)
-        except Exception:
-            svg_text = None
-        if not svg_text:
+    if non_struct_diagrams:
+        files = render_diagrams(
+            non_struct_diagrams,
+            output_name,
+            output_format="svg",
+            audit_context=_build_render_audit_context(context),
+        )
+        for file_path, diagram in zip(files, non_struct_diagrams):
+            try:
+                svg_text = read_text_file(file_path)
+            except Exception:
+                svg_text = None
+            if not svg_text:
+                continue
+            entries.append(
+                {
+                    "diagram_type": diagram.get("type"),
+                    "svg": svg_text,
+                    "svg_file": file_path,
+                    "rendering_service": ("mermaid" if (diagram.get("format") or "").lower().startswith("mermaid") else "plantuml"),
+                }
+            )
+    for diagram in struct_diagrams:
+        svg_text = diagram.get("svg")
+        svg_file = diagram.get("svg_file")
+        if not svg_text or not svg_file:
             continue
         entries.append(
             {
                 "diagram_type": diagram.get("type"),
                 "svg": svg_text,
-                "svg_file": file_path,
+                "svg_file": svg_file,
+                "rendering_service": "structurizr",
             }
         )
     return {"ir_entries": entries}
@@ -1108,7 +1390,8 @@ def tool_generate_sequence_from_architecture(
             "diagram_type": "sequence",
             "svg": svg_text,
             "svg_file": svg_file,
-            "reason": "Generated from architecture context"
+            "reason": "Generated from architecture context",
+            "rendering_service": choice.renderer,
         }]
     }
 
@@ -1141,6 +1424,7 @@ def tool_generate_plantuml_sequence(
                 "svg_file": svg_path,
                 "plantuml_text": render_payload.get("sanitized_text"),
                 "reason": "PlantUML sequence from architecture",
+                "rendering_service": "plantuml",
             }
         ]
     }
@@ -1157,7 +1441,27 @@ def tool_mermaid_renderer(
         if not ir:
             raise ValueError("ir is required when diagram_text is not provided")
         renderer_ir = RendererIR.parse_obj(ir)
-        diagram_text = ir_to_mermaid(renderer_ir)
+        if not settings.openai_api_key:
+            raise ValueError("OPENAI_API_KEY is required for LLM Mermaid generation")
+        diagram_text = _llm_generate_mermaid_from_ir(
+            renderer_ir,
+            diagram_type=str(renderer_ir.diagram_kind or "diagram"),
+            plan=ArchitecturePlan.parse_obj({
+                "system_name": "Generated",
+                "diagram_views": ["diagram"],
+                "zones": {
+                    "clients": [],
+                    "edge": [],
+                    "core_services": [],
+                    "external_services": [],
+                    "data_stores": [],
+                },
+                "relationships": [],
+                "visual_hints": {"layout": renderer_ir.layout, "group_by_zone": False, "external_dashed": True},
+                "diagram_kind": renderer_ir.diagram_kind,
+            }),
+            context=context,
+        )
 
     payload = render_llm_mermaid(diagram_text, target_name)
     return {
@@ -1355,7 +1659,7 @@ def register_mcp_tools(registry: MCPRegistry) -> None:
         MCPTool(
             name="generate_diagram",
             description="Generates a specific diagram type from an architecture plan.",
-            input_schema={"type": "object", "properties": {"architecture_plan": {"type": "object"}, "output_name": {"type": "string"}, "diagram_type": {"type": "string"}}, "required": ["architecture_plan", "output_name", "diagram_type"]},
+            input_schema={"type": "object", "properties": {"architecture_plan": {"type": "object"}, "output_name": {"type": "string"}, "diagram_type": {"type": "string"}, "rendering_service": {"type": ["string", "null"]}}, "required": ["architecture_plan", "output_name", "diagram_type"]},
             output_schema={"type": "object", "properties": {"ir_entries": {"type": "array"}}},
             side_effects="writes diagram files",
             handler=tool_generate_diagram,
@@ -1365,7 +1669,7 @@ def register_mcp_tools(registry: MCPRegistry) -> None:
         MCPTool(
             name="generate_multiple_diagrams",
             description="Generates multiple diagrams from an architecture plan.",
-            input_schema={"type": "object", "properties": {"architecture_plan": {"type": "object"}, "output_name": {"type": "string"}, "diagram_types": {"type": "array", "items": {"type": "string"}}}, "required": ["architecture_plan", "output_name"]},
+            input_schema={"type": "object", "properties": {"architecture_plan": {"type": "object"}, "output_name": {"type": "string"}, "diagram_types": {"type": "array", "items": {"type": "string"}}, "rendering_service": {"type": ["string", "null"]}}, "required": ["architecture_plan", "output_name"]},
             output_schema={"type": "object", "properties": {"ir_entries": {"type": "array"}}},
             side_effects="writes diagram files",
             handler=tool_generate_multiple_diagrams,

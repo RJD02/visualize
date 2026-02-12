@@ -102,7 +102,16 @@ _MULTIPLE_DIAGRAM_HINTS = [
 
 _DEFAULT_DIAGRAM_TYPE = "system_context"
 
-_RENDERING_SERVICES = {"programmatic", "llm_plantuml", "llm_mermaid", "external_service"}
+_RENDERING_SERVICES = {
+    "programmatic",
+    "llm_plantuml",
+    "llm_mermaid",
+    "external_service",
+    "auto",
+    "plantuml",
+    "mermaid",
+    "structurizr",
+}
 _EXTERNAL_SERVICE_TOOLS = {
     "render_image_from_plan",
     "edit_existing_image",
@@ -237,14 +246,32 @@ def _prefers_multiple_generation(diagram_count: int | None, message: str, reques
     return len(_unique_diagram_types(requested_types)) > 1
 
 
-def _build_generation_step(requested_types: List[str], prefer_multiple: bool) -> Dict[str, Any]:
+def _infer_rendering_service_from_message(message: str) -> str | None:
+    lowered = (message or "").lower()
+    if "mermaid" in lowered:
+        return "mermaid"
+    if "plantuml" in lowered or "plant uml" in lowered:
+        return "plantuml"
+    if "structurizr" in lowered:
+        return "structurizr"
+    if any(tok in lowered for tok in ["sequence", "flow", "interaction", "story"]):
+        return "mermaid"
+    return None
+
+
+def _build_generation_step(requested_types: List[str], prefer_multiple: bool, rendering_service: str | None = None) -> Dict[str, Any]:
     types = _unique_diagram_types(requested_types)
     if not types:
         types = [_DEFAULT_DIAGRAM_TYPE]
     if prefer_multiple:
         arguments = {"diagram_types": types} if types else {}
+        if rendering_service:
+            arguments["rendering_service"] = rendering_service
         return {"tool": "generate_multiple_diagrams", "arguments": arguments}
-    return {"tool": "generate_diagram", "arguments": {"diagram_type": types[0]}}
+    arguments = {"diagram_type": types[0]}
+    if rendering_service:
+        arguments["rendering_service"] = rendering_service
+    return {"tool": "generate_diagram", "arguments": arguments}
 
 
 def _text_contains(text: str, keywords: List[str]) -> bool:
@@ -283,7 +310,7 @@ PLANNER_SYSTEM = (
     "  \"intent\": \"explain|edit_image|diagram_change|regenerate|clarify|generate_sequence\",\n"
     "  \"diagram_count\": number or null,\n"
     "  \"diagrams\": [\n"
-    "    {\"type\": \"system_context|container|component|sequence|other\", \"reason\": \"string\"}\n"
+    "    {\"type\": \"system_context|container|component|sequence|flow|other\", \"reason\": \"string\"}\n"
     "  ],\n"
     "  \"target_image_id\": \"uuid or null\",\n"
     "  \"target_diagram_type\": \"system_context|container|component|sequence|other|none\",\n"
@@ -299,6 +326,7 @@ PLANNER_SYSTEM = (
     "- If the user asks to generate/create a SEQUENCE diagram or PLANTUML diagram or flow diagram, AND state.has_architecture_plan is true: intent=generate_sequence and plan=[{tool: 'generate_sequence_from_architecture', arguments: {}}].\n"
     "- If multiple diagrams are needed: use generate_multiple_diagrams and include diagram_types in tool arguments.\n"
     "- If a single diagram type is requested: use generate_diagram.\n"
+    "- When choosing a renderer, set rendering_service in tool arguments (auto|plantuml|mermaid|structurizr).\n"
     "- If diagram type change: intent=diagram_change and plan should call generate_diagram when needed.\n"
     "- If edit image/diagram: intent=edit_image and plan should call edit_diagram_ir when possible.\n"
     "- If regenerate: intent=regenerate and plan should call generate_architecture_plan then generate_multiple_diagrams.\n"
@@ -423,7 +451,8 @@ class ConversationPlannerAgent:
             lowered = (message or "").lower()
             requested_types = _collect_requested_diagram_types(message, [])
             prefer_multiple = _prefers_multiple_generation(diagram_count_hint, message, requested_types)
-            generation_step = _build_generation_step(requested_types, prefer_multiple)
+            rendering_service = _infer_rendering_service_from_message(message)
+            generation_step = _build_generation_step(requested_types, prefer_multiple, rendering_service)
             diagram_pref_meta = {
                 "requested_types": _unique_diagram_types(requested_types) or [_DEFAULT_DIAGRAM_TYPE],
                 "prefer_multiple": prefer_multiple,
@@ -463,17 +492,26 @@ class ConversationPlannerAgent:
             return plan_with_style
         client = get_openai_client()
 
+        plan_summary = None
+        if isinstance(state.get("architecture_plan"), dict):
+            plan_data = state.get("architecture_plan") or {}
+            plan_summary = {
+                "system_name": plan_data.get("system_name"),
+                "diagram_views": plan_data.get("diagram_views"),
+                "diagram_kind": plan_data.get("diagram_kind"),
+            }
         prompt = {
             "message": message,
             "tools": tools,
             "state": {
                 "active_image_id": state.get("active_image_id"),
                 "diagram_types": state.get("diagram_types", []),
-                "images": _safe_list(state.get("images", []), ["id", "version", "reason"]),
+                "images": _safe_list(state.get("images", []), ["id", "version", "reason", "file_path"]),
                 "history": state.get("history", []),
                 "github_url": state.get("github_url"),
                 "has_architecture_plan": bool(state.get("architecture_plan")),
                 "input_text": state.get("input_text"),
+                "architecture_plan_summary": plan_summary,
             },
             "requested_diagram_count": diagram_count_hint,
         }
@@ -498,7 +536,8 @@ class ConversationPlannerAgent:
             diagram_count_value = diagram_count_hint
         requested_types = _collect_requested_diagram_types(message, data.get("diagrams"))
         prefer_multiple_generation = _prefers_multiple_generation(diagram_count_value, message, requested_types)
-        generation_step_template = _build_generation_step(requested_types, prefer_multiple_generation)
+        rendering_service_hint = _infer_rendering_service_from_message(message)
+        generation_step_template = _build_generation_step(requested_types, prefer_multiple_generation, rendering_service_hint)
 
         # Utility: extract a GitHub URL if present
         gh_match = re.search(r"https?://github\.com/[^\s]+", message or "", re.IGNORECASE)
@@ -643,7 +682,8 @@ class ConversationPlannerAgent:
             content_value = state.get("input_text") or message
             requested_types = _collect_requested_diagram_types(message, [])
             prefer_multiple = _prefers_multiple_generation(diagram_count, message, requested_types)
-            generation_step = _build_generation_step(requested_types, prefer_multiple)
+            rendering_service = _infer_rendering_service_from_message(message)
+            generation_step = _build_generation_step(requested_types, prefer_multiple, rendering_service)
             plan_steps = [
                 {"tool": "generate_architecture_plan", "arguments": {"content": content_value}},
                 generation_step,

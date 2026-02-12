@@ -10,6 +10,7 @@ openai==1.40.8
 # httpx>=0.28 is required by google-genai; OpenAI compatibility handled in src/utils/openai_client.py
 httpx==0.28.1
 requests==2.32.4
+jsonschema==4.23.0
 pytest==8.3.2
 python-multipart==0.0.9
 python-docx==1.1.2

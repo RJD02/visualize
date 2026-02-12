@@ -10,7 +10,6 @@ from src.translation.translators import (
     structural_to_structurizr,
     structural_to_plantuml,
 )
-from src.renderers import fake_renderers
 from src.renderers.renderer_ir import RendererIR
 
 
@@ -107,7 +106,7 @@ def choose_renderer(ir: StructuralSchema | RendererIR | dict | Any, override: Op
 
 
 def render_ir(ir: StructuralSchema | RendererIR | dict | Any, override: Optional[str] = None) -> Tup[str, RendererChoice]:
-    """Render structural IR using translators and fake renderers (POC).
+    """Render structural IR using translators and real renderers.
 
     Returns (svg_text, RendererChoice)
     """
@@ -119,32 +118,19 @@ def render_ir(ir: StructuralSchema | RendererIR | dict | Any, override: Optional
     # Translate and render
     if renderer == "mermaid":
         inp = structural_to_mermaid(struct)
-        try:
-            # lazy import to avoid heavy deps at module import time
-            from src.renderers.mermaid_renderer import render_mermaid_svg as _render_mermaid_svg
+        # lazy import to avoid heavy deps at module import time
+        from src.renderers.mermaid_renderer import render_mermaid_svg as _render_mermaid_svg
 
-            svg = _render_mermaid_svg(inp)
-            ok = True
-        except Exception:
-            ok, svg = fake_renderers.render_mermaid(inp)
+        svg = _render_mermaid_svg(inp)
     elif renderer == "structurizr":
         # prefer a conversion pipeline that yields SVG: StructuralIR -> PlantUML -> SVG
-        try:
-            from src.renderers.structurizr_renderer import render_structurizr_svg_from_structural
+        from src.renderers.structurizr_renderer import render_structurizr_svg_from_structural
 
-            svg = render_structurizr_svg_from_structural(struct)
-            ok = True
-        except Exception:
-            inp = structural_to_structurizr(struct)
-            ok, svg = fake_renderers.render_structurizr(inp)
+        svg = render_structurizr_svg_from_structural(struct)
     else:
         inp = structural_to_plantuml(struct)
-        try:
-            from src.renderers.plantuml_renderer import render_plantuml_svg_text as _render_plantuml_svg_text
+        from src.renderers.plantuml_renderer import render_plantuml_svg_text as _render_plantuml_svg_text
 
-            svg = _render_plantuml_svg_text(inp, output_name="renderer_plantuml")
-            ok = True
-        except Exception:
-            ok, svg = fake_renderers.render_plantuml(inp)
+        svg = _render_plantuml_svg_text(inp, output_name="renderer_plantuml")
 
     return svg, RendererChoice(renderer=renderer, reason=reason)

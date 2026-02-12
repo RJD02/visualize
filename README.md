@@ -62,3 +62,11 @@ Image edits call `ImageEditAgent` only and reuse the stored ArchitecturePlan.
 ```
 pytest
 ```
+
+UI Cypress (from ui/):
+
+```
+cd ui
+npm install
+npx cypress run --spec cypress/e2e/diagram-feedback.cy.ts
+```

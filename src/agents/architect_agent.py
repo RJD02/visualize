@@ -19,14 +19,15 @@ from src.utils.openai_client import get_openai_client
 
 
 ARCHITECT_INSTRUCTION = (
-    "You are a senior software architect. "
-    "Analyze the system at an architectural level. "
+    "You are a diagram planning agent. "
+    "Analyze the input and build a structured plan for diagrams. "
     "Think in responsibilities, boundaries, and data flow. "
+    "If the input is a narrative/story/workflow, emphasize sequence/flow views and treat actors as clients. "
     "Do not describe classes or methods. "
     "Output ONLY valid JSON and match this exact schema:\n"
     "{\n"
     "  \"system_name\": \"string\",\n"
-    "  \"diagram_views\": [\"system_context\", \"container\", \"component\", \"sequence\"],\n"
+    "  \"diagram_views\": [\"system_context\", \"container\", \"component\", \"sequence\", \"flow\"],\n"
     "  \"zones\": {\n"
     "    \"clients\": [],\n"
     "    \"edge\": [],\n"
@@ -41,7 +42,13 @@ ARCHITECT_INSTRUCTION = (
     "    \"layout\": \"left-to-right|top-down\",\n"
     "    \"group_by_zone\": true,\n"
     "    \"external_dashed\": true\n"
-    "  }\n"
+    "  },\n"
+    "  \"diagram_kind\": \"architecture|sequence|flow|story|other\",\n"
+    "  \"rendering_hints\": {\n"
+    "    \"preferred_renderer\": \"auto|plantuml|mermaid|structurizr\",\n"
+    "    \"confidence\": 0.0\n"
+    "  },\n"
+    "  \"narrative\": \"optional summary of story/flow if present\"\n"
     "}\n"
 )
 
@@ -69,15 +76,35 @@ def _extract_json(text: str) -> Dict[str, Any]:
             return ast.literal_eval(pythonish)
 
 
-def generate_architecture_plan_from_text(input_text: str) -> Dict[str, Any]:
+def _build_context_block(context: Dict[str, Any] | None) -> str:
+    if not context:
+        return ""
+    fields = []
+    user_message = context.get("user_message")
+    if user_message:
+        fields.append(f"User request: {user_message}")
+    source_repo = context.get("source_repo") or context.get("repo_url")
+    if source_repo:
+        fields.append(f"Source repo: {source_repo}")
+    input_text = context.get("input_text")
+    if input_text and input_text != user_message:
+        fields.append(f"Original input: {input_text}")
+    return "\n".join(fields)
+
+
+def generate_architecture_plan_from_text(input_text: str, *, context: Dict[str, Any] | None = None) -> Dict[str, Any]:
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not set")
     client = get_openai_client()
+    context_block = _build_context_block(context)
+    prompt = f"Input:\n{input_text}"
+    if context_block:
+        prompt = f"{context_block}\n\n{prompt}"
     response = client.chat.completions.create(
         model=settings.openai_model,
         messages=[
             {"role": "system", "content": ARCHITECT_INSTRUCTION},
-            {"role": "user", "content": f"Input:\n{input_text}"},
+            {"role": "user", "content": prompt},
         ],
         temperature=0.2,
     )

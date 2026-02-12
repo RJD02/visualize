@@ -1,0 +1,243 @@
+{
+  "diagram_type": "sequence",
+  "layout": "left-right",
+  "zone_order": ["clients", "edge", "core_services"],
+  "nodes": [
+    {
+      "node_id": "candidate_portal",
+      "label": "Candidate Portal",
+      "role": "actor",
+      "zone": "clients",
+      "type": "actor",
+      "stereotype": "web",
+      "shape": "rounded",
+      "size_hint": "small",
+      "width": null,
+      "height": null,
+      "node_style": {
+        "fillColor": "#C7D2FE",
+        "borderColor": "#4338CA",
+        "textColor": "#0F172A",
+        "borderWidth": 2,
+        "fontSize": 12,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "padding": 6
+      },
+      "rendering_hints": {
+        "plantuml": {
+          "plantuml_shape": "participant",
+          "plantuml_color": "#C7D2FE",
+          "plantuml_label": "Candidate Portal"
+        },
+        "mermaid": {
+          "mermaid_type": "participant",
+          "mermaid_id": "CandidatePortal"
+        }
+      },
+      "metadata": {
+        "confidence": 0.96,
+        "reason": "explicit actor"
+      }
+    },
+    {
+      "node_id": "api_gateway",
+      "label": "API Gateway",
+      "role": "gateway",
+      "zone": "edge",
+      "type": "container",
+      "stereotype": "ingress",
+      "shape": "rectangle",
+      "size_hint": "medium",
+      "width": null,
+      "height": null,
+      "node_style": {
+        "fillColor": "#E0E7FF",
+        "borderColor": "#4338CA",
+        "textColor": "#0F172A",
+        "borderWidth": 2,
+        "fontSize": 12,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "padding": 8
+      },
+      "rendering_hints": {
+        "plantuml": {
+          "plantuml_shape": "participant",
+          "plantuml_color": "#E0E7FF",
+          "plantuml_label": "API Gateway"
+        },
+        "mermaid": {
+          "mermaid_type": "participant",
+          "mermaid_id": "ApiGateway"
+        }
+      },
+      "metadata": {
+        "confidence": 0.9,
+        "reason": "derived from relationships"
+      }
+    },
+    {
+      "node_id": "match_service",
+      "label": "Match Service",
+      "role": "service",
+      "zone": "core_services",
+      "type": "component",
+      "stereotype": "logic",
+      "shape": "rectangle",
+      "size_hint": "medium",
+      "width": null,
+      "height": null,
+      "node_style": {
+        "fillColor": "#DDD6FE",
+        "borderColor": "#7C3AED",
+        "textColor": "#0F172A",
+        "borderWidth": 2,
+        "fontSize": 12,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "padding": 8
+      },
+      "rendering_hints": {
+        "plantuml": {
+          "plantuml_shape": "participant",
+          "plantuml_color": "#DDD6FE",
+          "plantuml_label": "Match Service"
+        },
+        "mermaid": {
+          "mermaid_type": "participant",
+          "mermaid_id": "MatchService"
+        }
+      },
+      "metadata": {
+        "confidence": 0.88,
+        "reason": "derived from plan core_services"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "candidate_portal__api_gateway_sync",
+      "from_id": "candidate_portal",
+      "to_id": "api_gateway",
+      "rel_type": "sync",
+      "label": "POST /applications",
+      "style": "solid",
+      "color": "#4338CA",
+      "width": 2,
+      "arrowhead": "normal",
+      "text_style": {
+        "fontSize": 11,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "textColor": "#4338CA"
+      },
+      "curvature": 0,
+      "confidence": 0.94,
+      "reason": "explicit sequence message"
+    },
+    {
+      "edge_id": "api_gateway__match_service_sync",
+      "from_id": "api_gateway",
+      "to_id": "match_service",
+      "rel_type": "sync",
+      "label": "Validate & forward",
+      "style": "solid",
+      "color": "#4338CA",
+      "width": 2,
+      "arrowhead": "normal",
+      "text_style": {
+        "fontSize": 11,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "textColor": "#4338CA"
+      },
+      "curvature": 0,
+      "confidence": 0.9,
+      "reason": "explicit sequence message"
+    },
+    {
+      "edge_id": "match_service__candidate_portal_async",
+      "from_id": "match_service",
+      "to_id": "candidate_portal",
+      "rel_type": "async",
+      "label": "Send confirmation",
+      "style": "dashed",
+      "color": "#7C3AED",
+      "width": 2,
+      "arrowhead": "open",
+      "text_style": {
+        "fontSize": 11,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "textColor": "#7C3AED"
+      },
+      "curvature": 0,
+      "confidence": 0.82,
+      "reason": "derived async notification"
+    }
+  ],
+  "nodeIntent": {
+    "actor": {
+      "shape": "rounded",
+      "default_style": {
+        "fillColor": "#C7D2FE",
+        "borderColor": "#4338CA",
+        "textColor": "#0F172A",
+        "borderWidth": 2,
+        "fontSize": 12,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "padding": 6
+      },
+      "stereotype": "actor"
+    },
+    "service": {
+      "shape": "rectangle",
+      "default_style": {
+        "fillColor": "#DDD6FE",
+        "borderColor": "#7C3AED",
+        "textColor": "#0F172A",
+        "borderWidth": 2,
+        "fontSize": 12,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "padding": 8
+      },
+      "stereotype": "component"
+    }
+  },
+  "edgeIntent": {
+    "sync": {
+      "style": "solid",
+      "color": "#4338CA",
+      "width": 2,
+      "arrowhead": "normal",
+      "text_style": {
+        "fontSize": 11,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "textColor": "#4338CA"
+      }
+    },
+    "async": {
+      "style": "dashed",
+      "color": "#7C3AED",
+      "width": 2,
+      "arrowhead": "open",
+      "text_style": {
+        "fontSize": 11,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "textColor": "#7C3AED"
+      }
+    }
+  },
+  "globalIntent": {
+    "palette": ["#C7D2FE", "#E0E7FF", "#DDD6FE", "#4338CA", "#0F172A"],
+    "layout": "left-right",
+    "density": "compact",
+    "mood": "formal"
+  },
+  "metadata": {
+    "generated_by": "ir_enricher_v0",
+    "spec_version": "v34",
+    "timestamp": "2026-02-11T10:05:00Z",
+    "validation": [
+      {
+        "severity": "warning",
+        "message": "Async edge derived from inferred notification"
+      }
+    ]
+  }
+}

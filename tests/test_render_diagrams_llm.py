@@ -53,7 +53,7 @@ def test_render_diagrams_records_audit_for_llm(monkeypatch, tmp_path):
 
 def test_render_diagrams_handles_mermaid_llm(monkeypatch, tmp_path):
     monkeypatch.setattr(pr.settings, "output_dir", str(tmp_path))
-    monkeypatch.setattr(pr, "render_mermaid_svg", lambda text: "<svg>mermaid</svg>")
+    monkeypatch.setattr(pr, "render_mermaid_svg_with_command", lambda text: ("<svg>mermaid</svg>", "docker run --rm ..."))
 
     diagrams = [
         {

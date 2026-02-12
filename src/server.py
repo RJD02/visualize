@@ -34,6 +34,7 @@ from src.schemas import (
 from src.db_models import DiagramIR, Image, Session as SessionRecord, StylingAudit
 from src.mcp.registry import mcp_registry
 from src.mcp.tools import register_mcp_tools
+from src import mcp_tool as mcp_tool_adapter
 from src.services.session_service import (
     create_session,
     get_latest_plan,
@@ -47,6 +48,7 @@ from src.services.session_service import (
     list_plan_records,
     save_edited_ir,
 )
+from src.feedback_controller import process_feedback, list_ir_history, get_ir as get_ir_v2, create_demo_diagram
 from src.services.styling_audit_service import get_styling_audit, list_styling_audits, list_audits_by_plan
 from src.animation_resolver import inject_animation, validate_presentation_spec
 from src.animation.diagram_renderer import render_svg
@@ -63,6 +65,9 @@ app = FastAPI(title="Architecture Visualization API")
 ui_dir = Path(__file__).resolve().parent.parent / "ui" / "dist"
 if ui_dir.exists():
     app.mount("/ui", StaticFiles(directory=str(ui_dir), html=True), name="ui")
+    assets_dir = ui_dir / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 outputs_dir = Path(__file__).resolve().parent.parent / "outputs"
 if outputs_dir.exists():
@@ -387,6 +392,39 @@ def save_image_ir(image_id: str, payload: dict, db: DbSession = Depends(get_db))
     )
 
 
+@app.post("/api/feedback")
+def feedback_endpoint(payload: dict, db: DbSession = Depends(get_db)):
+    try:
+        result = process_feedback(db, payload or {})
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    return JSONResponse(content=result)
+
+
+@app.get("/api/ir/{diagram_id}")
+def get_ir_endpoint(diagram_id: str, db: DbSession = Depends(get_db)):
+    try:
+        payload = get_ir_v2(db, diagram_id)
+    except Exception as exc:
+        return JSONResponse(status_code=404, content={"error": str(exc)})
+    return JSONResponse(content=payload)
+
+
+@app.get("/api/ir/{diagram_id}/history")
+def get_ir_history_endpoint(diagram_id: str, db: DbSession = Depends(get_db)):
+    try:
+        payload = list_ir_history(db, diagram_id)
+    except Exception as exc:
+        return JSONResponse(status_code=404, content={"error": str(exc)})
+    return JSONResponse(content={"history": payload})
+
+
+@app.get("/api/demo/diagram")
+def demo_diagram_endpoint(db: DbSession = Depends(get_db)):
+    result = create_demo_diagram(db)
+    return JSONResponse(content=result)
+
+
 @app.get("/api/diagrams/{diagram_id}/styling/audit", response_model=List[StylingAuditResponse])
 def list_styling_audits_api(diagram_id: str, db: DbSession = Depends(get_db)):
     try:
@@ -597,6 +635,42 @@ def mcp_execute_endpoint(payload: MCPExecuteRequest, db: DbSession = Depends(get
         raise HTTPException(status_code=500, detail=str(exc))
     audit_id = result.get("audit_id") or result.get("auditId")
     return MCPExecuteResponse(result=result, audit_id=audit_id)
+
+
+@app.post("/mcp/tool/generate")
+def mcp_tool_generate(payload: dict, db: DbSession = Depends(get_db)):
+    result = mcp_tool_adapter.generate(payload or {}, db=db)
+    return JSONResponse(content=result)
+
+
+@app.post("/mcp/tool/feedback")
+def mcp_tool_feedback(payload: dict, db: DbSession = Depends(get_db)):
+    result = mcp_tool_adapter.apply_feedback(payload or {}, db=db)
+    return JSONResponse(content=result)
+
+
+@app.get("/mcp/tool/ir/{diagram_id}")
+def mcp_tool_get_ir(diagram_id: str, db: DbSession = Depends(get_db)):
+    result = mcp_tool_adapter.get_ir_payload(diagram_id, db=db)
+    return JSONResponse(content=result)
+
+
+@app.get("/mcp/tool/ir/{diagram_id}/history")
+def mcp_tool_get_ir_history(diagram_id: str, db: DbSession = Depends(get_db)):
+    result = mcp_tool_adapter.get_ir_history_payload(diagram_id, db=db)
+    return JSONResponse(content=result)
+
+
+@app.get("/mcp/tool/export/svg/{diagram_id}")
+def mcp_tool_export_svg(diagram_id: str, db: DbSession = Depends(get_db)):
+    result = mcp_tool_adapter.export_svg(diagram_id, db=db)
+    return JSONResponse(content=result)
+
+
+@app.get("/mcp/tool/export/gif/{diagram_id}")
+def mcp_tool_export_gif(diagram_id: str, db: DbSession = Depends(get_db)):
+    result = mcp_tool_adapter.export_gif(diagram_id, db=db)
+    return JSONResponse(content=result)
 
 
 @app.get("/api/debug/modules")

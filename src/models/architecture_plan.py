@@ -33,6 +33,9 @@ class ArchitecturePlan(BaseModel):
     zones: Zones
     relationships: List[Relationship]
     visual_hints: VisualHints
+    diagram_kind: str | None = None
+    rendering_hints: dict | None = None
+    narrative: str | None = None
 
     model_config = {
         "populate_by_name": True,

@@ -1,6 +1,7 @@
 """Translate RendererIR into renderer-specific inputs."""
 from __future__ import annotations
 
+import json
 from typing import Dict, List
 
 from src.renderers.renderer_ir import RendererIR
@@ -19,10 +20,33 @@ def _node_label(node_id: str, label: str | None) -> str:
     return label or node_id
 
 
+def _node_declaration(node_id: str, label: str, kind: str | None) -> str:
+    normalized = (kind or "").lower()
+    if normalized == "person":
+        return f"{node_id}([\"{label}\"])"
+    if normalized == "database":
+        return f"{node_id}[(\"{label}\")]"
+    if normalized in {"system", "external"}:
+        return f"{node_id}((\"{label}\"))"
+    return f"{node_id}[\"{label}\"]"
+
+
 def ir_to_mermaid(ir: RendererIR) -> str:
     ir = ir.normalized()
     direction = "LR" if ir.layout == "left-to-right" else "TB"
-    lines: List[str] = [f"flowchart {direction}"]
+    theme_vars = {
+        "background": "#ffffff",
+        "primaryColor": "#e2e8f0",
+        "primaryBorderColor": "#1f2937",
+        "primaryTextColor": "#0f172a",
+        "lineColor": "#334155",
+        "fontFamily": "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+    }
+    lines: List[str] = [
+        f"%%{{init: {{'theme': 'base', 'themeVariables': {json.dumps(theme_vars)}}}}}%%",
+        f"flowchart {direction}",
+        "classDef defaultNode fill:#dbeafe,stroke:#1d4ed8,color:#0f172a,stroke-width:2px;",
+    ]
     id_map: Dict[str, str] = {}
     for node in ir.nodes:
         safe_id = _sanitize_id(node.id)
@@ -43,20 +67,23 @@ def ir_to_mermaid(ir: RendererIR) -> str:
                 continue
             grouped_nodes.add(node.id)
             node_label = _node_label(node.id, node.label)
-            lines.append(f"  {id_map[node.id]}[\"{node_label}\"]")
+            lines.append(f"  {_node_declaration(id_map[node.id], node_label, node.kind)}")
         lines.append("end")
 
     for node in ir.nodes:
         if node.id in grouped_nodes:
             continue
         node_label = _node_label(node.id, node.label)
-        lines.append(f"{id_map[node.id]}[\"{node_label}\"]")
+        lines.append(_node_declaration(id_map[node.id], node_label, node.kind))
 
     for edge in ir.edges:
         source = id_map.get(edge.from_, _sanitize_id(edge.from_))
         target = id_map.get(edge.to, _sanitize_id(edge.to))
         label = f"|{edge.label}|" if edge.label else ""
         lines.append(f"{source} -->{label} {target}")
+
+    if id_map:
+        lines.append(f"class {','.join(id_map.values())} defaultNode")
 
     return "\n".join(lines)
 

@@ -22,9 +22,15 @@ def strip_svg_colors(svg_text: str) -> str:
             if parent is not None:
                 parent.remove(el)
             continue
-        for attr in ("fill", "stroke", "color", "style"):
+        for attr in ("fill", "stroke", "color"):
             if attr in el.attrib:
-                el.attrib.pop(attr, None)
+                value = el.attrib.get(attr, "")
+                if _COLOR_PATTERN.search(value):
+                    el.attrib.pop(attr, None)
+        if "style" in el.attrib:
+            value = el.attrib.get("style", "")
+            if _COLOR_PATTERN.search(value):
+                el.attrib.pop("style", None)
     return ET.tostring(root, encoding="unicode")
 
 

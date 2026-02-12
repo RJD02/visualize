@@ -1,0 +1,419 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://visualization.local/schemas/ir_enriched_schema_v1.json",
+  "title": "EnrichedDiagramIR",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "diagram_type",
+    "layout",
+    "zone_order",
+    "nodes",
+    "edges",
+    "nodeIntent",
+    "edgeIntent",
+    "globalIntent",
+    "metadata"
+  ],
+  "properties": {
+    "diagram_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "layout": {
+      "type": "string",
+      "enum": [
+        "top-down",
+        "left-right",
+        "right-left",
+        "bottom-up",
+        "grid"
+      ]
+    },
+    "zone_order": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Node"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Edge"
+      }
+    },
+    "nodeIntent": {
+      "type": "object",
+      "patternProperties": {
+        ".+": {
+          "$ref": "#/definitions/NodeIntent"
+        }
+      },
+      "additionalProperties": false
+    },
+    "edgeIntent": {
+      "type": "object",
+      "patternProperties": {
+        ".+": {
+          "$ref": "#/definitions/EdgeIntent"
+        }
+      },
+      "additionalProperties": false
+    },
+    "globalIntent": {
+      "$ref": "#/definitions/GlobalIntent"
+    },
+    "metadata": {
+      "$ref": "#/definitions/Metadata"
+    }
+  },
+  "definitions": {
+    "color": {
+      "type": "string",
+      "pattern": "^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{8})$"
+    },
+    "Node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "label",
+        "role",
+        "zone",
+        "type",
+        "shape",
+        "size_hint",
+        "node_style",
+        "rendering_hints",
+        "metadata"
+      ],
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "zone": {
+          "type": ["string", "null"]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "system",
+            "container",
+            "component",
+            "data_store",
+            "external",
+            "actor"
+          ]
+        },
+        "stereotype": {
+          "type": ["string", "null"]
+        },
+        "shape": {
+          "type": "string",
+          "enum": [
+            "rectangle",
+            "rounded",
+            "circular",
+            "cylinder",
+            "cloud"
+          ]
+        },
+        "size_hint": {
+          "type": "string",
+          "enum": ["small", "medium", "large"]
+        },
+        "width": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "height": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "node_style": {
+          "$ref": "#/definitions/NodeStyle"
+        },
+        "rendering_hints": {
+          "$ref": "#/definitions/RenderingHints"
+        },
+        "metadata": {
+          "$ref": "#/definitions/NodeMetadata"
+        }
+      }
+    },
+    "Edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edge_id",
+        "from_id",
+        "to_id",
+        "rel_type",
+        "label",
+        "style",
+        "color",
+        "width",
+        "arrowhead",
+        "text_style",
+        "confidence",
+        "reason"
+      ],
+      "properties": {
+        "edge_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "from_id": {
+          "type": "string"
+        },
+        "to_id": {
+          "type": "string"
+        },
+        "rel_type": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "style": {
+          "type": "string",
+          "enum": ["solid", "dashed", "dotted"]
+        },
+        "color": {
+          "$ref": "#/definitions/color"
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0
+        },
+        "arrowhead": {
+          "type": "string",
+          "enum": ["normal", "open", "none"]
+        },
+        "text_style": {
+          "$ref": "#/definitions/TextStyle"
+        },
+        "curvature": {
+          "type": ["number", "null"]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "NodeStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fillColor",
+        "borderColor",
+        "textColor",
+        "borderWidth",
+        "fontSize",
+        "fontFamily",
+        "padding"
+      ],
+      "properties": {
+        "fillColor": {
+          "$ref": "#/definitions/color"
+        },
+        "borderColor": {
+          "$ref": "#/definitions/color"
+        },
+        "textColor": {
+          "$ref": "#/definitions/color"
+        },
+        "borderWidth": {
+          "type": "number",
+          "minimum": 0
+        },
+        "fontSize": {
+          "type": "number",
+          "minimum": 6
+        },
+        "fontFamily": {
+          "type": "string",
+          "minLength": 1
+        },
+        "padding": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "TextStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fontSize", "fontFamily", "textColor"],
+      "properties": {
+        "fontSize": {
+          "type": "number",
+          "minimum": 6
+        },
+        "fontFamily": {
+          "type": "string",
+          "minLength": 1
+        },
+        "textColor": {
+          "$ref": "#/definitions/color"
+        }
+      }
+    },
+    "RenderingHints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plantuml", "mermaid"],
+      "properties": {
+        "plantuml": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "plantuml_shape": { "type": "string" },
+            "plantuml_color": { "$ref": "#/definitions/color" },
+            "plantuml_label": { "type": "string" }
+          }
+        },
+        "mermaid": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mermaid_type": { "type": "string" },
+            "mermaid_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          }
+        }
+      }
+    },
+    "NodeMetadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["confidence", "reason"],
+      "properties": {
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "reason": {
+          "type": "string"
+        },
+        "source": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "NodeIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "shape": { "type": "string" },
+        "default_style": { "$ref": "#/definitions/NodeStyle" },
+        "stereotype": { "type": ["string", "null"] }
+      }
+    },
+    "EdgeIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "style": {
+          "type": "string",
+          "enum": ["solid", "dashed", "dotted"]
+        },
+        "color": { "$ref": "#/definitions/color" },
+        "width": { "type": "number", "minimum": 0 },
+        "arrowhead": {
+          "type": "string",
+          "enum": ["normal", "open", "none"]
+        },
+        "text_style": { "$ref": "#/definitions/TextStyle" }
+      }
+    },
+    "GlobalIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["palette", "layout", "density", "mood"],
+      "properties": {
+        "palette": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/color" },
+          "minItems": 2,
+          "maxItems": 8
+        },
+        "layout": {
+          "type": "string"
+        },
+        "density": {
+          "type": "string",
+          "enum": ["compact", "balanced", "spacious"]
+        },
+        "mood": {
+          "type": "string",
+          "enum": ["minimal", "vibrant", "formal", "playful"]
+        }
+      }
+    },
+    "Metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "generated_by",
+        "spec_version",
+        "timestamp",
+        "validation"
+      ],
+      "properties": {
+        "generated_by": {
+          "type": "string"
+        },
+        "spec_version": {
+          "type": "string",
+          "const": "v34"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "validation": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["severity", "message"],
+            "properties": {
+              "severity": {
+                "type": "string",
+                "enum": ["info", "warning", "error"]
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

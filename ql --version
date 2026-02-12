@@ -1,0 +1,18 @@
+                  id                  |         created_at         |  diagram_type  |                                        content_snip                                         
+--------------------------------------+----------------------------+----------------+---------------------------------------------------------------------------------------------
+ b97bb5eb-b47e-405d-b83c-8da37040f914 | 2026-02-11 09:14:39.8154   | context        | 
+ 187485ed-77ec-4b5b-b049-61b34404c96d | 2026-02-11 09:14:39.815396 | system_context | 
+ 2d1a22d2-4c34-467e-80a1-036b66c72530 | 2026-02-11 09:14:39.815388 |                | Generated context, system_context diagram(s).
+ 6c71c374-a83c-4964-8ee0-cc9ef3a3b3f2 | 2026-02-11 09:14:28.531921 |                | The Lighthouse That Learned                                                                +
+                                      |                            |                |                                                                                            +
+                                      |                            |                | On a quiet island, an old automated lighthouse named Astra had one job: guide ships safely 
+ 06624e0a-2cfd-4f3a-8a67-37183a4f8847 | 2026-02-11 09:11:20.073899 | context        | 
+ 764e0c77-6744-4bd5-88d0-f76656b3e1fe | 2026-02-11 09:11:20.073891 | system_context | 
+ 53a673af-19ce-423d-8e90-48998be7ca2d | 2026-02-11 09:11:20.073879 |                | Generated context, system_context diagram(s).
+ 77e474a6-bd98-4146-aa54-b514930b6cbf | 2026-02-11 09:11:11.555733 |                | The Lighthouse That Learned                                                                +
+                                      |                            |                |                                                                                            +
+                                      |                            |                | On a quiet island, an old automated lighthouse named Astra had one job: guide ships safely 
+ 5f001572-b77c-41a6-9814-b4dc7c712807 | 2026-02-11 07:43:40.500133 | component      | 
+ 3d394504-e16d-4a5e-a7cd-b50313e8b865 | 2026-02-11 07:43:40.500129 | component      | 
+(10 rows)
+

@@ -99,27 +99,27 @@ def _fallback_palette(graph: SVGStructuralGraph) -> Tuple[str, Dict[str, Any]]:
     node_count = len(graph.nodes)
     if node_count <= 5:
         return "high-contrast", {
-            "background": "#0f172a",
-            "node_default": {"fill": "#1e293b", "stroke": "#f8fafc", "strokeWidth": 1.6},
-            "node_highlight": {"fill": "#22d3ee", "stroke": "#67e8f9", "strokeWidth": 2.2},
-            "edge_default": {"stroke": "#94a3b8", "strokeWidth": 1.4},
+            "background": "#0b1220",
+            "node_default": {"fill": "#1f2a3d", "stroke": "#e2e8f0", "strokeWidth": 1.6},
+            "node_highlight": {"fill": "#0ea5e9", "stroke": "#38bdf8", "strokeWidth": 2.2},
+            "edge_default": {"stroke": "#cbd5f5", "strokeWidth": 1.4},
             "edge_active": {"stroke": "#f59e0b", "strokeWidth": 2.2},
             "font_weight": "600",
         }
     if score > 0.08 or node_count >= 18:
         return "minimalist", {
             "background": "#f8fafc",
-            "node_default": {"fill": "#f1f5f9", "stroke": "#64748b", "strokeWidth": 1.2},
-            "node_highlight": {"fill": "#e2e8f0", "stroke": "#0f172a", "strokeWidth": 2.0},
-            "edge_default": {"stroke": "#94a3b8", "strokeWidth": 1.0},
+            "node_default": {"fill": "#ffffff", "stroke": "#334155", "strokeWidth": 1.3},
+            "node_highlight": {"fill": "#e2e8f0", "stroke": "#1f2937", "strokeWidth": 2.0},
+            "edge_default": {"stroke": "#475569", "strokeWidth": 1.1},
             "edge_active": {"stroke": "#0ea5e9", "strokeWidth": 2.0},
             "font_weight": "500",
         }
     return "vibrant", {
         "background": "#ffffff",
-        "node_default": {"fill": "#e0f2fe", "stroke": "#0ea5e9", "strokeWidth": 1.4},
+        "node_default": {"fill": "#dbeafe", "stroke": "#2563eb", "strokeWidth": 1.4},
         "node_highlight": {"fill": "#fef3c7", "stroke": "#f59e0b", "strokeWidth": 2.2},
-        "edge_default": {"stroke": "#64748b", "strokeWidth": 1.2},
+        "edge_default": {"stroke": "#475569", "strokeWidth": 1.2},
         "edge_active": {"stroke": "#f97316", "strokeWidth": 2.2},
         "font_weight": "500",
     }
@@ -139,7 +139,7 @@ def _fallback_plan(graph: SVGStructuralGraph) -> AestheticPlan:
             "active": palette["edge_active"],
         },
         "font": {
-            "family": "system-ui",
+            "family": "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
             "weight": palette["font_weight"],
         },
     }

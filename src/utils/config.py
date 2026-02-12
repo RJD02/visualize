@@ -20,15 +20,16 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("HF_API_TOKEN", "HUGGING_FACE_API_KEY"),
     )
     database_url: str = Field(
-        default="postgresql+psycopg://postgres:postgres@localhost:5432/archviz",
+        default="postgresql+psycopg://jira:change_me@localhost:5432/jira_plus_plus",
         validation_alias=AliasChoices("DATABASE_URL"),
     )
     plantuml_server_url: str = "https://www.plantuml.com/plantuml/png/"
-    mermaid_renderer_image: str = "archviz-mermaid-renderer:latest"
+    mermaid_renderer_image: str = "minlag/mermaid-cli"
     structurizr_renderer_image: str = "archviz-structurizr-renderer:latest"
     output_dir: str = "outputs"
     default_diagram_type: str = "sequence"
     enable_ir: bool = True  # Enable IR pipeline by default
+    enable_ir_enrichment: bool = True  # Use enriched IR payloads when available
 
 
 settings = Settings()

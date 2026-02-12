@@ -1,5 +1,8 @@
 import { memo, useMemo, useState, useEffect, useRef } from 'react';
 
+import DiagramViewer from './diagram/DiagramViewer.jsx';
+import FeedbackModal from './diagram/FeedbackModal.jsx';
+
 const normalizeSvg = (svg) => {
     if (!svg) return svg;
     return svg
@@ -43,6 +46,25 @@ const extractGithubUrl = (value) => {
     if (!value) return null;
     const match = value.match(/https?:\/\/github\.com\/[\w.-]+\/[\w.-]+/i);
     return match ? match[0] : null;
+};
+
+const resolveProviderLabel = (provider) => {
+    if (!provider) return null;
+    const normalized = String(provider).toLowerCase();
+    if (normalized === 'llm_mermaid') return 'Mermaid (LLM)';
+    if (normalized === 'llm_plantuml') return 'PlantUML (LLM)';
+    if (normalized === 'plantuml') return 'PlantUML';
+    if (normalized === 'mermaid') return 'Mermaid';
+    if (normalized === 'structurizr') return 'Structurizr';
+    if (normalized === 'auto') return 'Auto';
+    return provider;
+};
+
+const diagramProvider = (image) => {
+    if (!image) return null;
+    const meta = image.ir_metadata || {};
+    const provider = meta.rendering_service || meta.render_provider || meta.provider;
+    return resolveProviderLabel(provider);
 };
 
 const DiffViewer = ({ before, after, label }) => {
@@ -174,18 +196,26 @@ const PlanDetail = ({ plan }) => {
                 <div>
                     <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Executions</div>
                     <ul className="space-y-1 text-[11px] text-slate-300">
-                        {executions.map((exec) => (
-                            <li key={exec.id} className="border border-slate-900 rounded-md px-2 py-1">
-                                <span className="font-semibold text-slate-100">{exec.tool_name}</span>
-                                <span className="ml-2 text-slate-500">step {exec.step_index}</span>
-                                {exec.audit_id ? (
-                                    <span className="ml-2 text-indigo-300">audit {String(exec.audit_id).slice(0, 8)}</span>
-                                ) : null}
-                                {exec.duration_ms ? (
-                                    <span className="ml-2 text-slate-500">{exec.duration_ms}ms</span>
-                                ) : null}
-                            </li>
-                        ))}
+                        {executions.map((exec) => {
+                            const provider = resolveProviderLabel(
+                                exec?.output?.rendering_service || exec?.arguments?.rendering_service || exec?.output?.format
+                            );
+                            return (
+                                <li key={exec.id} className="border border-slate-900 rounded-md px-2 py-1">
+                                    <span className="font-semibold text-slate-100">{exec.tool_name}</span>
+                                    <span className="ml-2 text-slate-500">step {exec.step_index}</span>
+                                    {provider ? (
+                                        <span className="ml-2 text-emerald-300">{provider}</span>
+                                    ) : null}
+                                    {exec.audit_id ? (
+                                        <span className="ml-2 text-indigo-300">audit {String(exec.audit_id).slice(0, 8)}</span>
+                                    ) : null}
+                                    {exec.duration_ms ? (
+                                        <span className="ml-2 text-slate-500">{exec.duration_ms}ms</span>
+                                    ) : null}
+                                </li>
+                            );
+                        })}
                     </ul>
                 </div>
             ) : null}
@@ -193,7 +223,7 @@ const PlanDetail = ({ plan }) => {
     );
 };
 
-const InlineDiagram = memo(({ image, className = '', onClick, enhanced = true, cacheRef, animated = false }) => {
+const InlineDiagram = memo(({ image, className = '', onClick, enhanced = true, cacheRef, animated = false, onBlockSelect }) => {
     const renderCountRef = useRef(0);
     renderCountRef.current += 1;
     const [svgMarkup, setSvgMarkup] = useState(null);
@@ -249,13 +279,17 @@ const InlineDiagram = memo(({ image, className = '', onClick, enhanced = true, c
     }
     return (
         <div
-            data-cy="inline-diagram"
             data-image-id={image.id}
-            className={`mt-2 rounded-lg border border-slate-800 bg-black/20 ${className}`}
             style={{ cursor: onClick ? 'zoom-in' : 'default' }}
             onClick={onClick}
-            dangerouslySetInnerHTML={{ __html: svgMarkup }}
-        />
+        >
+            <DiagramViewer
+                dataCy="inline-diagram"
+                className={`inline-diagram mt-2 rounded-lg border border-slate-800 bg-black/20 ${className}`}
+                svgMarkup={svgMarkup}
+                onBlockSelect={onBlockSelect}
+            />
+        </div>
     );
 }, (prev, next) => {
     const prevImage = prev.image || {};
@@ -321,6 +355,9 @@ export default function App() {
     const [planDetailsVisible, setPlanDetailsVisible] = useState({});
     const [planDetailsLoading, setPlanDetailsLoading] = useState({});
     const [inlineAnimationMap, setInlineAnimationMap] = useState({});
+    const [feedbackOpen, setFeedbackOpen] = useState(false);
+    const [feedbackBlockId, setFeedbackBlockId] = useState(null);
+    const [feedbackImageId, setFeedbackImageId] = useState(null);
     const inlineSvgCacheRef = useRef({});
 
     useEffect(() => {
@@ -534,6 +571,16 @@ export default function App() {
         return data.session_id;
     };
 
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const params = new URLSearchParams(window.location.search);
+        const seedSession = params.get('session');
+        if (seedSession && seedSession !== sessionId) {
+            setSessionId(seedSession);
+            refreshSession(seedSession);
+        }
+    }, []);
+
     const refreshSession = async (id) => {
         const data = await fetchJson(`/api/sessions/${id}`);
         setMessages(data.messages || []);
@@ -543,6 +590,38 @@ export default function App() {
         setSourceRepo(data.source_repo || null);
         setSourceCommit(data.source_commit || null);
         return data;
+    };
+
+    const openFeedback = (imageId, blockId) => {
+        setFeedbackImageId(imageId);
+        setFeedbackBlockId(blockId || null);
+        setFeedbackOpen(true);
+    };
+
+    const submitFeedback = async ({ action, payload }) => {
+        if (!feedbackImageId) return;
+        try {
+            await fetchJson('/api/feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    diagram_id: feedbackImageId,
+                    block_id: feedbackBlockId,
+                    action,
+                    payload,
+                }),
+            });
+            if (sessionId) {
+                const data = await refreshSession(sessionId);
+                if (data?.images?.length) {
+                    const latest = [...data.images].sort((a, b) => (b.version || 0) - (a.version || 0))[0];
+                    if (latest) setExpandedImage(latest);
+                }
+            }
+            setFeedbackOpen(false);
+        } catch (err) {
+            alert('Feedback failed: ' + (err?.message || err));
+        }
     };
 
     const sendMessage = async () => {
@@ -598,7 +677,7 @@ export default function App() {
 
     return (
         <div className="min-h-screen bg-slate-950 text-slate-100">
-            <div className="max-w-6xl mx-auto px-6 py-6">
+            <div className="max-w-[96vw] 2xl:max-w-[1800px] mx-auto px-4 sm:px-6 py-6">
                 <div className="flex items-center justify-between mb-5">
                     <div className="flex items-center gap-4">
                         <div className="text-2xl font-semibold tracking-tight">Architecture Copilot</div>
@@ -655,7 +734,7 @@ export default function App() {
                         {sourceRepo ? <div>Repo: {sourceRepo} {sourceCommit ? `(${sourceCommit.slice(0, 7)})` : ''}</div> : null}
                     </div>
                 </div>
-                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-6">
+                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr] gap-6">
                     <div className="flex flex-col h-[82vh] xl:col-span-2">
                         <div className="bg-slate-900/60 rounded-2xl p-4 border border-slate-800 flex-1 flex flex-col min-h-0">
                             <div className="flex items-center justify-between mb-3">
@@ -726,6 +805,7 @@ export default function App() {
                                                     <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
                                                         <div className="text-[11px] text-slate-500">
                                                             Image v{m.image_version || imageMap.get(m.image_id).version} · {(m.diagram_type || imageMap.get(m.image_id)?.diagram_type || inferDiagramType(imageMap.get(m.image_id).file_path))}
+                                                            {diagramProvider(imageMap.get(m.image_id)) ? ` · ${diagramProvider(imageMap.get(m.image_id))}` : ''}
                                                         </div>
                                                         <InlineDiagram
                                                             image={imageMap.get(m.image_id)}
@@ -733,6 +813,7 @@ export default function App() {
                                                             onClick={() => setExpandedImage(imageMap.get(m.image_id))}
                                                             cacheRef={inlineSvgCacheRef}
                                                             animated={!!inlineAnimationMap[m.image_id]}
+                                                            onBlockSelect={(blockId) => openFeedback(m.image_id, blockId)}
                                                         />
                                                         <div className="mt-2 flex flex-wrap gap-2">
                                                             <button
@@ -879,14 +960,20 @@ export default function App() {
                         </div>
                     </div>
                     <div data-cy="diagram-history-panel" className="bg-slate-900/60 rounded-2xl p-4 border border-slate-800 h-[82vh] overflow-y-auto">
-                        <div className="text-sm font-semibold mb-2">Diagram History</div>
-                        <div className="text-xs text-slate-400 mb-4">All diagrams are shown inline in chat. Click any image to expand.</div>
+                        <div className="mb-4 border-b border-slate-800 pb-3 flex items-center justify-between">
+                            <div>
+                                <div className="text-[11px] uppercase tracking-wide text-slate-400">Diagram History</div>
+                                <div className="text-xs text-slate-500">All diagrams are shown inline in chat. Click any image to expand.</div>
+                            </div>
+                            <div className="text-[11px] text-slate-500">{sortedImages.length} total</div>
+                        </div>
                         {sortedImages.length ? (
                             <div className="space-y-4">
                                 {sortedImages.map((img) => (
                                     <div key={img.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
                                         <div className="text-[11px] text-slate-500">
                                             Image v{img.version} · {inferDiagramType(img.file_path)}
+                                            {diagramProvider(img) ? ` · ${diagramProvider(img)}` : ''}
                                         </div>
                                         <InlineDiagram
                                             image={img}
@@ -894,6 +981,7 @@ export default function App() {
                                             onClick={() => setExpandedImage(img)}
                                             cacheRef={inlineSvgCacheRef}
                                             animated={!!inlineAnimationMap[img.id]}
+                                            onBlockSelect={(blockId) => openFeedback(img.id, blockId)}
                                         />
                                         <div className="mt-2 flex flex-wrap gap-2">
                                             <button
@@ -1005,8 +1093,13 @@ export default function App() {
                         )}
                     </div>
                     <div className="bg-slate-900/60 rounded-2xl p-4 border border-slate-800 h-[82vh] overflow-y-auto">
-                        <div className="text-sm font-semibold mb-2">Planner History</div>
-                        <div className="text-xs text-slate-400 mb-4">Every request generates a plan with ordered tool steps.</div>
+                        <div className="mb-4 border-b border-slate-800 pb-3 flex items-center justify-between">
+                            <div>
+                                <div className="text-[11px] uppercase tracking-wide text-slate-400">Planner History</div>
+                                <div className="text-xs text-slate-500">Every request generates a plan with ordered tool steps.</div>
+                            </div>
+                            <div className="text-[11px] text-slate-500">{plansSorted.length} plans</div>
+                        </div>
                         {plansSorted.length ? (
                             <div className="space-y-4">
                                 {plansSorted.map((plan) => (
@@ -1102,13 +1195,16 @@ export default function App() {
                                     </div>
                                     <div className="text-xs text-slate-400">
                                         Image v{expandedImage.version} · {inferDiagramType(expandedImage.file_path)}
+                                        {diagramProvider(expandedImage) ? ` · ${diagramProvider(expandedImage)}` : ''}
                                     </div>
                                 </div>
                                 <div style={{ textAlign: 'center' }}>
                                     {currentSvgKey && expandedSvgMap[currentSvgKey] ? (
-                                        <div
+                                        <DiagramViewer
                                             key={`${currentSvgKey}-${inlineSvgToken}`}
-                                            dangerouslySetInnerHTML={{ __html: expandedSvgMap[currentSvgKey] }}
+                                            className="inline-diagram inline-diagram--modal"
+                                            svgMarkup={expandedSvgMap[currentSvgKey]}
+                                            onBlockSelect={(blockId) => expandedImage && openFeedback(expandedImage.id, blockId)}
                                         />
                                     ) : (
                                         <div className="text-sm text-slate-400">Loading inline SVG…</div>
@@ -1119,6 +1215,12 @@ export default function App() {
                     </div>
                 </div>
             ) : null}
+            <FeedbackModal
+                open={feedbackOpen}
+                blockId={feedbackBlockId}
+                onClose={() => setFeedbackOpen(false)}
+                onSubmit={submitFeedback}
+            />
         </div>
     );
 }

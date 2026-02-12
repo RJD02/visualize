@@ -1,0 +1,12 @@
+{
+  "name": "diagram_architect_agent",
+  "version": "0.2",
+  "endpoints": {
+    "generate": {"method": "POST", "path": "/mcp/tool/generate", "payloadSchema": "specs/schemas/generate.json"},
+    "feedback": {"method": "POST", "path": "/mcp/tool/feedback", "payloadSchema": "specs/schemas/feedback.json"},
+    "get_ir": {"method": "GET", "path": "/mcp/tool/ir/{diagram_id}"},
+    "get_ir_history": {"method": "GET", "path": "/mcp/tool/ir/{diagram_id}/history"},
+    "export_svg": {"method": "GET", "path": "/mcp/tool/export/svg/{diagram_id}"},
+    "export_gif": {"method": "GET", "path": "/mcp/tool/export/gif/{diagram_id}"}
+  }
+}

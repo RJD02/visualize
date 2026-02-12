@@ -1,0 +1,283 @@
+{
+  "diagram_type": "system_context",
+  "layout": "top-down",
+  "zone_order": ["clients", "edge", "core_services", "data_stores"],
+  "nodes": [
+    {
+      "node_id": "end_user",
+      "label": "End User",
+      "role": "actor",
+      "zone": "clients",
+      "type": "actor",
+      "stereotype": "person",
+      "shape": "circular",
+      "size_hint": "small",
+      "width": null,
+      "height": null,
+      "node_style": {
+        "fillColor": "#FDE68A",
+        "borderColor": "#D97706",
+        "textColor": "#0F172A",
+        "borderWidth": 2,
+        "fontSize": 12,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "padding": 6
+      },
+      "rendering_hints": {
+        "plantuml": {
+          "plantuml_shape": "actor",
+          "plantuml_color": "#FDE68A",
+          "plantuml_label": "End User"
+        },
+        "mermaid": {
+          "mermaid_type": "actor",
+          "mermaid_id": "EndUser"
+        }
+      },
+      "metadata": {
+        "confidence": 1.0,
+        "reason": "explicit zone entry",
+        "source": "plan.zones.clients"
+      }
+    },
+    {
+      "node_id": "api_gateway",
+      "label": "API Gateway",
+      "role": "gateway",
+      "zone": "edge",
+      "type": "container",
+      "stereotype": "ingress",
+      "shape": "rounded",
+      "size_hint": "medium",
+      "width": null,
+      "height": null,
+      "node_style": {
+        "fillColor": "#FDF2F8",
+        "borderColor": "#BE185D",
+        "textColor": "#0F172A",
+        "borderWidth": 2,
+        "fontSize": 12,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "padding": 8
+      },
+      "rendering_hints": {
+        "plantuml": {
+          "plantuml_shape": "component",
+          "plantuml_color": "#FDF2F8",
+          "plantuml_label": "API Gateway"
+        },
+        "mermaid": {
+          "mermaid_type": "class",
+          "mermaid_id": "ApiGateway"
+        }
+      },
+      "metadata": {
+        "confidence": 0.95,
+        "reason": "derived from edge zone",
+        "source": "relationship.from"
+      }
+    },
+    {
+      "node_id": "job_service",
+      "label": "Job Service",
+      "role": "service",
+      "zone": "core_services",
+      "type": "container",
+      "stereotype": "api",
+      "shape": "rectangle",
+      "size_hint": "medium",
+      "width": null,
+      "height": null,
+      "node_style": {
+        "fillColor": "#FCE7F3",
+        "borderColor": "#DB2777",
+        "textColor": "#0F172A",
+        "borderWidth": 2,
+        "fontSize": 12,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "padding": 8
+      },
+      "rendering_hints": {
+        "plantuml": {
+          "plantuml_shape": "component",
+          "plantuml_color": "#FCE7F3",
+          "plantuml_label": "Job Service"
+        },
+        "mermaid": {
+          "mermaid_type": "class",
+          "mermaid_id": "JobService"
+        }
+      },
+      "metadata": {
+        "confidence": 0.92,
+        "reason": "explicit in plan core_services",
+        "source": "plan.zones.core_services"
+      }
+    },
+    {
+      "node_id": "postgres_store",
+      "label": "Postgres Store",
+      "role": "data_store",
+      "zone": "data_stores",
+      "type": "data_store",
+      "stereotype": "database",
+      "shape": "cylinder",
+      "size_hint": "medium",
+      "width": null,
+      "height": null,
+      "node_style": {
+        "fillColor": "#FBCFE8",
+        "borderColor": "#BE185D",
+        "textColor": "#0F172A",
+        "borderWidth": 2,
+        "fontSize": 12,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "padding": 10
+      },
+      "rendering_hints": {
+        "plantuml": {
+          "plantuml_shape": "database",
+          "plantuml_color": "#FBCFE8",
+          "plantuml_label": "Postgres Store"
+        },
+        "mermaid": {
+          "mermaid_type": "entity",
+          "mermaid_id": "PostgresStore"
+        }
+      },
+      "metadata": {
+        "confidence": 0.9,
+        "reason": "derived from plan data_stores",
+        "source": "plan.zones.data_stores"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "end_user__api_gateway_sync",
+      "from_id": "end_user",
+      "to_id": "api_gateway",
+      "rel_type": "sync",
+      "label": "Submit job request",
+      "style": "solid",
+      "color": "#0F172A",
+      "width": 2,
+      "arrowhead": "normal",
+      "text_style": {
+        "fontSize": 11,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "textColor": "#0F172A"
+      },
+      "curvature": 0,
+      "confidence": 0.95,
+      "reason": "explicit relationship"
+    },
+    {
+      "edge_id": "api_gateway__job_service_sync",
+      "from_id": "api_gateway",
+      "to_id": "job_service",
+      "rel_type": "sync",
+      "label": "Forward REST call",
+      "style": "solid",
+      "color": "#0F172A",
+      "width": 2,
+      "arrowhead": "normal",
+      "text_style": {
+        "fontSize": 11,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "textColor": "#0F172A"
+      },
+      "curvature": 0,
+      "confidence": 0.9,
+      "reason": "explicit relationship"
+    },
+    {
+      "edge_id": "job_service__postgres_store_data",
+      "from_id": "job_service",
+      "to_id": "postgres_store",
+      "rel_type": "data",
+      "label": "Persist job data",
+      "style": "dashed",
+      "color": "#DB2777",
+      "width": 2,
+      "arrowhead": "open",
+      "text_style": {
+        "fontSize": 11,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "textColor": "#DB2777"
+      },
+      "curvature": 0.1,
+      "confidence": 0.85,
+      "reason": "implied from data store dependency"
+    }
+  ],
+  "nodeIntent": {
+    "actor": {
+      "shape": "circular",
+      "default_style": {
+        "fillColor": "#FDE68A",
+        "borderColor": "#D97706",
+        "textColor": "#0F172A",
+        "borderWidth": 2,
+        "fontSize": 12,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "padding": 6
+      },
+      "stereotype": "person"
+    },
+    "service": {
+      "shape": "rectangle",
+      "default_style": {
+        "fillColor": "#FCE7F3",
+        "borderColor": "#DB2777",
+        "textColor": "#0F172A",
+        "borderWidth": 2,
+        "fontSize": 12,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "padding": 8
+      },
+      "stereotype": "api"
+    }
+  },
+  "edgeIntent": {
+    "sync": {
+      "style": "solid",
+      "color": "#0F172A",
+      "width": 2,
+      "arrowhead": "normal",
+      "text_style": {
+        "fontSize": 11,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "textColor": "#0F172A"
+      }
+    },
+    "data": {
+      "style": "dashed",
+      "color": "#DB2777",
+      "width": 2,
+      "arrowhead": "open",
+      "text_style": {
+        "fontSize": 11,
+        "fontFamily": "Inter, Arial, sans-serif",
+        "textColor": "#DB2777"
+      }
+    }
+  },
+  "globalIntent": {
+    "palette": ["#FDE68A", "#FBCFE8", "#FDF2F8", "#DB2777", "#0F172A"],
+    "layout": "top-down",
+    "density": "balanced",
+    "mood": "minimal"
+  },
+  "metadata": {
+    "generated_by": "ir_enricher_v0",
+    "spec_version": "v34",
+    "timestamp": "2026-02-11T10:00:00Z",
+    "validation": [
+      {
+        "severity": "info",
+        "message": "Palette derived from user aesthetic intent"
+      }
+    ]
+  }
+}

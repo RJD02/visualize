@@ -10,3 +10,29 @@ body {
     margin: 0;
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
 }
+
+.inline-diagram {
+    width: 100%;
+    overflow: hidden;
+}
+
+.inline-diagram svg {
+    width: 100% !important;
+    height: auto !important;
+    display: block;
+}
+
+.inline-diagram--modal {
+    max-height: 80vh;
+    max-width: 92vw;
+    margin: 0 auto;
+    overflow: auto;
+    padding: 8px;
+}
+
+.inline-diagram--modal svg {
+    width: auto !important;
+    height: auto !important;
+    max-width: 100% !important;
+    max-height: 70vh !important;
+}
