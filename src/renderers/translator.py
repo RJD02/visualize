@@ -20,7 +20,22 @@ def _node_label(node_id: str, label: str | None) -> str:
     return label or node_id
 
 
-def _node_declaration(node_id: str, label: str, kind: str | None) -> str:
+def _node_declaration(node_id: str, label: str, kind: str | None, shape: str | None = None) -> str:
+    # Shape takes priority over kind for Mermaid syntax
+    s = (shape or "").lower()
+    if s in ("circle", "round"):
+        return f"{node_id}((\"{label}\"))"
+    if s in ("cylinder", "database", "db"):
+        return f"{node_id}[(\"{label}\")]"
+    if s in ("diamond", "rhombus"):
+        return f"{node_id}{{{{{label}}}}}"
+    if s in ("hexagon", "hex"):
+        return f"{node_id}{{{{{{{label}}}}}}}"
+    if s in ("ellipse", "oval", "stadium"):
+        return f"{node_id}([\"{label}\"])"
+    if s in ("rounded",):
+        return f"{node_id}[\"{label}\"]"
+    # Fall back to kind-based mapping
     normalized = (kind or "").lower()
     if normalized == "person":
         return f"{node_id}([\"{label}\"])"
@@ -67,14 +82,14 @@ def ir_to_mermaid(ir: RendererIR) -> str:
                 continue
             grouped_nodes.add(node.id)
             node_label = _node_label(node.id, node.label)
-            lines.append(f"  {_node_declaration(id_map[node.id], node_label, node.kind)}")
+            lines.append(f"  {_node_declaration(id_map[node.id], node_label, node.kind, node.shape)}")
         lines.append("end")
 
     for node in ir.nodes:
         if node.id in grouped_nodes:
             continue
         node_label = _node_label(node.id, node.label)
-        lines.append(_node_declaration(id_map[node.id], node_label, node.kind))
+        lines.append(_node_declaration(id_map[node.id], node_label, node.kind, node.shape))
 
     for edge in ir.edges:
         source = id_map.get(edge.from_, _sanitize_id(edge.from_))
@@ -88,6 +103,30 @@ def ir_to_mermaid(ir: RendererIR) -> str:
     return "\n".join(lines)
 
 
+def _plantuml_keyword(shape: str | None, kind: str | None = None) -> str:
+    """Pick the PlantUML element keyword based on shape (priority) or kind."""
+    s = (shape or "").lower()
+    _SHAPE_MAP = {
+        "circle": "usecase", "round": "usecase",
+        "cylinder": "database", "database": "database", "db": "database",
+        "diamond": "card", "rhombus": "card",
+        "hexagon": "hexagon",
+        "person": "actor", "user": "actor",
+        "ellipse": "usecase", "oval": "usecase",
+        "queue": "queue", "stack": "stack",
+    }
+    if s in _SHAPE_MAP:
+        return _SHAPE_MAP[s]
+    k = (kind or "").lower()
+    _KIND_MAP = {
+        "person": "actor", "database": "database", "data_store": "database",
+        "queue": "queue",
+    }
+    if k in _KIND_MAP:
+        return _KIND_MAP[k]
+    return "component"
+
+
 def ir_to_plantuml(ir: RendererIR) -> str:
     ir = ir.normalized()
     direction = "left to right direction" if ir.layout == "left-to-right" else "top to bottom direction"
@@ -95,7 +134,8 @@ def ir_to_plantuml(ir: RendererIR) -> str:
     for node in ir.nodes:
         label = _node_label(node.id, node.label)
         alias = _sanitize_id(node.id)
-        lines.append(f"component \"{label}\" as {alias}")
+        keyword = _plantuml_keyword(node.shape, node.kind)
+        lines.append(f"{keyword} \"{label}\" as {alias}")
     for edge in ir.edges:
         source = _sanitize_id(edge.from_)
         target = _sanitize_id(edge.to)

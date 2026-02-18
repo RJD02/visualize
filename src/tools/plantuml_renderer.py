@@ -59,9 +59,13 @@ def _render_element(element: str, label: str, alias: str) -> str:
     return f"{element} \"{label}\" as {alias}"
 
 
-def _zone_block(title: str, items: List[str], alias: str, aliases: Dict[str, str], zone_name: str) -> str:
+def _zone_block(title: str, items: List[str], alias: str, aliases: Dict[str, str], zone_name: str, view: str | None = None) -> str:
     lines = [f"package \"{title}\" as {alias} {{"]
-    element = _element_for_zone(zone_name)
+    # In component view, render all items as components for clarity
+    if view == "component":
+        element = "component"
+    else:
+        element = _element_for_zone(zone_name)
     for item in items:
         item_alias = aliases[item]
         lines.append(f"  {_render_element(element, item, item_alias)}")
@@ -172,7 +176,7 @@ def generate_plantuml_from_plan(
                 items = items_map.get(zone_name, [])
                 if items:
                     alias = f"zone_{zone_name}"
-                    parts.append(_zone_block(zone_name, items, alias, aliases, zone_name))
+                    parts.append(_zone_block(zone_name, items, alias, aliases, zone_name, view=view))
                     zone_aliases.append(alias)
             for idx in range(len(zone_aliases) - 1):
                 parts.append(f"{zone_aliases[idx]} -[hidden]-> {zone_aliases[idx + 1]}")
@@ -183,7 +187,8 @@ def generate_plantuml_from_plan(
             for item in flat:
                 item_alias = aliases[item]
                 zone_name = node_to_zone.get(item, "core_services")
-                element = _element_for_zone(zone_name)
+                # In component view, render flat items as components
+                element = "component" if view == "component" else _element_for_zone(zone_name)
                 parts.append(_render_element(element, item, item_alias))
         # relationships are not filtered by view currently; they connect existing items
         parts.extend(_relationships(plan, aliases))

@@ -1,6 +1,7 @@
 """Feedback controller for IR mutation and regeneration."""
 from __future__ import annotations
 
+import uuid as _uuid
 from typing import Any, Dict
 from sqlalchemy.orm import Session as DbSession
 
@@ -17,8 +18,18 @@ class FeedbackError(Exception):
     pass
 
 
+def _to_uuid(value: str | _uuid.UUID) -> _uuid.UUID:
+    """Convert a string to a uuid.UUID if needed (DB columns are UUID)."""
+    if isinstance(value, _uuid.UUID):
+        return value
+    try:
+        return _uuid.UUID(str(value))
+    except (ValueError, AttributeError) as exc:
+        raise FeedbackError(f"Invalid UUID: {value}") from exc
+
+
 def _load_image(db: DbSession, diagram_id: str) -> Image:
-    image = db.get(Image, diagram_id)
+    image = db.get(Image, _to_uuid(diagram_id))
     if not image:
         raise FeedbackError("Image not found")
     return image

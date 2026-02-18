@@ -1,0 +1,4 @@
+nohup: ignoring input
+2026/02/15 11:34:33 msg=starting_go_backend mode=proxy port=8000 upstream=http://127.0.0.1:18000 start_embedded_python=false
+2026/02/15 11:35:33 msg=upstream_not_ready err=timeout waiting for http://127.0.0.1:18000/health
+exit status 1

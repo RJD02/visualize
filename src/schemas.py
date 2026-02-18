@@ -140,6 +140,27 @@ class MCPToolMetadata(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class AgentTraceResponse(BaseModel):
+    id: UUID
+    session_id: UUID
+    plan_id: Optional[UUID]
+    step_index: Optional[int]
+    agent_name: str
+    input_summary: Optional[dict]
+    output_summary: Optional[dict]
+    decision: Optional[str]
+    reasoning: Optional[str]
+    duration_ms: Optional[int]
+    error: Optional[str]
+    created_at: datetime
+
+
+class AgentTraceListResponse(BaseModel):
+    session_id: UUID
+    traces: List[AgentTraceResponse]
+    total: int
+
+
 class MCPDiscoverResponse(BaseModel):
     tools: List[MCPToolMetadata]
 

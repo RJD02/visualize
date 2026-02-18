@@ -11,6 +11,7 @@ class IRNode(BaseModel):
     kind: str = "service"
     label: Optional[str] = None
     group: Optional[str] = None
+    shape: Optional[str] = None
 
 
 class IREdge(BaseModel):

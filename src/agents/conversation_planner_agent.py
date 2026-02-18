@@ -237,13 +237,35 @@ def _collect_requested_diagram_types(message: str, plan_diagrams: List[Dict[str,
     return _unique_diagram_types(collected)
 
 
-def _prefers_multiple_generation(diagram_count: int | None, message: str, requested_types: List[str]) -> bool:
-    if diagram_count and diagram_count > 1:
-        return True
+def _pick_best_diagram_type(message: str, requested_types: List[str], plan_data: Dict[str, Any] | None = None) -> str:
+    """Select the single best diagram type based on user message and plan context.
+
+    Priority:
+    1. Explicit user request ("show me a sequence diagram")
+    2. Plan's diagram_kind hint (story/flow -> sequence, else system_context)
+    3. First available type from plan.diagram_views
+    4. Default to system_context
+    """
+    unique = _unique_diagram_types(requested_types)
+    if unique:
+        return unique[0]
+
+    # Infer from user message keywords
     lowered = (message or "").lower()
-    if any(token in lowered for token in _MULTIPLE_DIAGRAM_HINTS):
-        return True
-    return len(_unique_diagram_types(requested_types)) > 1
+    for dtype, tokens in _DIAGRAM_TYPE_HINTS.items():
+        if any(tok in lowered for tok in tokens):
+            return dtype
+
+    # Infer from plan metadata
+    if plan_data and isinstance(plan_data, dict):
+        kind = str(plan_data.get("diagram_kind") or "").lower()
+        if kind in {"story", "flow", "sequence", "interaction"}:
+            return "sequence"
+        views = plan_data.get("diagram_views") or []
+        if views:
+            return str(views[0])
+
+    return _DEFAULT_DIAGRAM_TYPE
 
 
 def _infer_rendering_service_from_message(message: str) -> str | None:
@@ -259,16 +281,10 @@ def _infer_rendering_service_from_message(message: str) -> str | None:
     return None
 
 
-def _build_generation_step(requested_types: List[str], prefer_multiple: bool, rendering_service: str | None = None) -> Dict[str, Any]:
-    types = _unique_diagram_types(requested_types)
-    if not types:
-        types = [_DEFAULT_DIAGRAM_TYPE]
-    if prefer_multiple:
-        arguments = {"diagram_types": types} if types else {}
-        if rendering_service:
-            arguments["rendering_service"] = rendering_service
-        return {"tool": "generate_multiple_diagrams", "arguments": arguments}
-    arguments = {"diagram_type": types[0]}
+def _build_generation_step(requested_types: List[str], rendering_service: str | None = None, message: str = "", plan_data: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    """Build a single generate_diagram step with the best diagram type."""
+    best = _pick_best_diagram_type(message, requested_types, plan_data)
+    arguments: Dict[str, Any] = {"diagram_type": best}
     if rendering_service:
         arguments["rendering_service"] = rendering_service
     return {"tool": "generate_diagram", "arguments": arguments}
@@ -308,7 +324,7 @@ PLANNER_SYSTEM = (
     "Use ONLY JSON and match this schema:\n"
     "{\n"
     "  \"intent\": \"explain|edit_image|diagram_change|regenerate|clarify|generate_sequence\",\n"
-    "  \"diagram_count\": number or null,\n"
+    "  \"diagram_count\": 1,\n"
     "  \"diagrams\": [\n"
     "    {\"type\": \"system_context|container|component|sequence|flow|other\", \"reason\": \"string\"}\n"
     "  ],\n"
@@ -321,18 +337,19 @@ PLANNER_SYSTEM = (
     "  ]\n"
     "}\n"
     "Rules:\n"
+    "- ALWAYS generate exactly ONE diagram. Pick the single BEST diagram type for the user's request.\n"
+    "- ALWAYS use generate_diagram (NEVER generate_multiple_diagrams). Set diagram_type in arguments.\n"
+    "- Choose the best diagram_type: system_context for high-level overview, container for services/deployment, "
+    "component for internal structure, sequence for flows/interactions.\n"
+    "- Choose the best rendering_service: mermaid for sequence/flow diagrams, plantuml for structural diagrams, "
+    "structurizr for C4 views. Set rendering_service in arguments (auto|plantuml|mermaid|structurizr).\n"
     "- If explain: intent=explain and plan should call explain_architecture.\n"
-    "- If the user provides a GitHub URL: intent=regenerate and plan should call ingest_github_repo, then generate_architecture_plan, followed by whichever of generate_multiple_diagrams or generate_diagram best suits the request.\n"
+    "- If the user provides a GitHub URL: intent=regenerate and plan should call ingest_github_repo, then generate_architecture_plan, then generate_diagram.\n"
     "- If the user asks to generate/create a SEQUENCE diagram or PLANTUML diagram or flow diagram, AND state.has_architecture_plan is true: intent=generate_sequence and plan=[{tool: 'generate_sequence_from_architecture', arguments: {}}].\n"
-    "- If multiple diagrams are needed: use generate_multiple_diagrams and include diagram_types in tool arguments.\n"
-    "- If a single diagram type is requested: use generate_diagram.\n"
-    "- When choosing a renderer, set rendering_service in tool arguments (auto|plantuml|mermaid|structurizr).\n"
-    "- If diagram type change: intent=diagram_change and plan should call generate_diagram when needed.\n"
+    "- If diagram type change: intent=diagram_change and plan should call generate_diagram.\n"
     "- If edit image/diagram: intent=edit_image and plan should call edit_diagram_ir when possible.\n"
-    "- If regenerate: intent=regenerate and plan should call generate_architecture_plan then generate_multiple_diagrams.\n"
-    "- If regenerate: intent=regenerate and plan should call generate_architecture_plan, then select generate_multiple_diagrams or generate_diagram based on how many diagrams are needed.\n"
+    "- If regenerate: intent=regenerate and plan should call generate_architecture_plan then generate_diagram.\n"
     "- If unclear: intent=clarify and plan should be empty.\n"
-    "- If diagram_count is provided, do not exceed it.\n"
     "- Choose target_image_id as the most recent image unless the user references a specific version.\n"
     "- CRITICAL: When user says 'generate sequence diagram' or 'create plantuml' or similar, and has_architecture_plan=true, you MUST use generate_sequence_from_architecture tool!"
 )
@@ -450,12 +467,10 @@ class ConversationPlannerAgent:
             # that ingests the repo and generates diagrams.
             lowered = (message or "").lower()
             requested_types = _collect_requested_diagram_types(message, [])
-            prefer_multiple = _prefers_multiple_generation(diagram_count_hint, message, requested_types)
             rendering_service = _infer_rendering_service_from_message(message)
-            generation_step = _build_generation_step(requested_types, prefer_multiple, rendering_service)
+            generation_step = _build_generation_step(requested_types, rendering_service=rendering_service, message=message)
             diagram_pref_meta = {
-                "requested_types": _unique_diagram_types(requested_types) or [_DEFAULT_DIAGRAM_TYPE],
-                "prefer_multiple": prefer_multiple,
+                "requested_types": [generation_step["arguments"]["diagram_type"]],
             }
             if "github.com" in lowered:
                 deterministic = {
@@ -531,13 +546,25 @@ class ConversationPlannerAgent:
         plan_steps = data.get("plan", []) or []
         lowered = (message or "").lower()
 
+        # Rewrite any generate_multiple_diagrams step the LLM may have
+        # produced into a single generate_diagram step.
+        for step in plan_steps:
+            if step.get("tool") == "generate_multiple_diagrams":
+                step["tool"] = "generate_diagram"
+                args = step.get("arguments") or {}
+                types = args.pop("diagram_types", None)
+                if types and isinstance(types, list) and not args.get("diagram_type"):
+                    args["diagram_type"] = types[0]
+                if not args.get("diagram_type"):
+                    args["diagram_type"] = _DEFAULT_DIAGRAM_TYPE
+                step["arguments"] = args
+
         diagram_count_value = _normalize_diagram_count(data.get("diagram_count"))
         if diagram_count_value is None:
             diagram_count_value = diagram_count_hint
         requested_types = _collect_requested_diagram_types(message, data.get("diagrams"))
-        prefer_multiple_generation = _prefers_multiple_generation(diagram_count_value, message, requested_types)
         rendering_service_hint = _infer_rendering_service_from_message(message)
-        generation_step_template = _build_generation_step(requested_types, prefer_multiple_generation, rendering_service_hint)
+        generation_step_template = _build_generation_step(requested_types, rendering_service=rendering_service_hint, message=message)
 
         # Utility: extract a GitHub URL if present
         gh_match = re.search(r"https?://github\.com/[^\s]+", message or "", re.IGNORECASE)
@@ -548,7 +575,7 @@ class ConversationPlannerAgent:
         mentions_intent = any(tok in lowered for tok in intent_tokens)
 
         has_ingest = any(p.get("tool") == "ingest_github_repo" for p in plan_steps)
-        has_gen_plan = any(p.get("tool") in {"generate_architecture_plan", "generate_multiple_diagrams", "generate_diagram", "generate_sequence_from_architecture", "generate_plantuml_sequence"} for p in plan_steps)
+        has_gen_plan = any(p.get("tool") in {"generate_architecture_plan", "generate_diagram", "generate_sequence_from_architecture", "generate_plantuml_sequence"} for p in plan_steps)
 
         # If a GitHub URL is present and ingestion is planned but generation is missing,
         # append generation steps to make the plan actionable.
@@ -589,9 +616,8 @@ class ConversationPlannerAgent:
                     step.setdefault("arguments", {})["repo_url"] = message
 
         diagram_pref_meta = {
-            "requested_types": _unique_diagram_types(requested_types) or [_DEFAULT_DIAGRAM_TYPE],
-            "prefer_multiple": prefer_multiple_generation,
-            "diagram_count": diagram_count_value,
+            "requested_types": [generation_step_template["arguments"]["diagram_type"]],
+            "diagram_count": 1,
         }
 
         plan_output = {
@@ -681,9 +707,9 @@ class ConversationPlannerAgent:
         if (not has_plan and not state.get("diagram_types")) and _text_contains(message, _DIAGRAM_REQUEST_KEYWORDS):
             content_value = state.get("input_text") or message
             requested_types = _collect_requested_diagram_types(message, [])
-            prefer_multiple = _prefers_multiple_generation(diagram_count, message, requested_types)
             rendering_service = _infer_rendering_service_from_message(message)
-            generation_step = _build_generation_step(requested_types, prefer_multiple, rendering_service)
+            generation_step = _build_generation_step(requested_types, rendering_service=rendering_service, message=message)
+            best_type = generation_step["arguments"]["diagram_type"]
             plan_steps = [
                 {"tool": "generate_architecture_plan", "arguments": {"content": content_value}},
                 generation_step,
@@ -691,10 +717,10 @@ class ConversationPlannerAgent:
             return {
                 "plan_id": plan_id,
                 "intent": "regenerate",
-                "diagram_count": diagram_count,
-                "diagrams": [],
+                "diagram_count": 1,
+                "diagrams": [{"type": best_type, "reason": "auto-selected best type"}],
                 "target_image_id": None,
-                "target_diagram_type": "none",
+                "target_diagram_type": best_type,
                 "instructions": message,
                 "requires_regeneration": True,
                 "plan": plan_steps,
@@ -702,8 +728,7 @@ class ConversationPlannerAgent:
                     "source": "heuristic",
                     "heuristic": "bootstrap",
                     "diagram_preferences": {
-                        "requested_types": _unique_diagram_types(requested_types) or [_DEFAULT_DIAGRAM_TYPE],
-                        "prefer_multiple": prefer_multiple,
+                        "requested_types": [best_type],
                     },
                 },
             }

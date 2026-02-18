@@ -16,6 +16,8 @@ from sqlalchemy import select, text
 
 from src.db import Base, SessionLocal, engine
 from src.schemas import (
+    AgentTraceListResponse,
+    AgentTraceResponse,
     ArchitecturePlanResponse,
     DiagramFileResponse,
     ImageIRResponse,
@@ -50,6 +52,7 @@ from src.services.session_service import (
 )
 from src.feedback_controller import process_feedback, list_ir_history, get_ir as get_ir_v2, create_demo_diagram
 from src.services.styling_audit_service import get_styling_audit, list_styling_audits, list_audits_by_plan
+from src.services.agent_trace_service import list_traces_by_session
 from src.animation_resolver import inject_animation, validate_presentation_spec
 from src.animation.diagram_renderer import render_svg
 from src.intent.semantic_aesthetic_ir import SemanticAestheticIR
@@ -59,6 +62,7 @@ import src.animation.animation_plan_generator as plan_module
 import src.animation.css_injector as css_module
 import src.animation.diagram_renderer as renderer_module
 import json
+from src import architecture_quality_agent as architecture_quality_agent
 
 app = FastAPI(title="Architecture Visualization API")
 
@@ -92,6 +96,16 @@ def get_db() -> Generator[DbSession, None, None]:
         yield db
     finally:
         db.close()
+
+
+def enqueue_ingest_job(**kwargs):
+    """Placeholder for enqueue_ingest_job. Runtime or tests may monkeypatch this."""
+    raise NotImplementedError("enqueue_ingest_job not implemented")
+
+
+def get_job(job_id: str):
+    """Placeholder for get_job. Runtime or tests may monkeypatch this."""
+    raise NotImplementedError("get_job not implemented")
 
 
 def _serialize_styling_audit(audit: StylingAudit) -> StylingAuditResponse:
@@ -348,6 +362,33 @@ def plan_history(plan_id: str, db: DbSession = Depends(get_db)):
     )
 
 
+@app.get("/api/sessions/{session_id}/traces", response_model=AgentTraceListResponse)
+def session_traces(session_id: str, db: DbSession = Depends(get_db)):
+    """Get all agent decision traces for a session, ordered chronologically."""
+    traces = list_traces_by_session(db, session_id)
+    return AgentTraceListResponse(
+        session_id=UUID(session_id),
+        traces=[
+            AgentTraceResponse(
+                id=t.id,
+                session_id=t.session_id,
+                plan_id=t.plan_id,
+                step_index=t.step_index,
+                agent_name=t.agent_name,
+                input_summary=t.input_summary,
+                output_summary=t.output_summary,
+                decision=t.decision,
+                reasoning=t.reasoning,
+                duration_ms=t.duration_ms,
+                error=t.error,
+                created_at=t.created_at,
+            )
+            for t in traces
+        ],
+        total=len(traces),
+    )
+
+
 @app.get("/api/images/{image_id}/ir", response_model=ImageIRResponse)
 def image_ir_detail(image_id: str, db: DbSession = Depends(get_db)):
     image = db.get(Image, image_id)
@@ -423,6 +464,22 @@ def get_ir_history_endpoint(diagram_id: str, db: DbSession = Depends(get_db)):
 def demo_diagram_endpoint(db: DbSession = Depends(get_db)):
     result = create_demo_diagram(db)
     return JSONResponse(content=result)
+
+
+@app.post("/api/analysis/architecture-quality")
+def analyze_architecture_api(payload: dict, db: DbSession = Depends(get_db)):
+    """Analyze an IR payload and return the architecture quality report.
+
+    Expected payload: { "ir": {...} }
+    """
+    ir = (payload or {}).get("ir")
+    if not ir or not isinstance(ir, dict):
+        return JSONResponse(status_code=400, content={"error": "Missing or invalid 'ir' in payload"})
+    try:
+        report = architecture_quality_agent.analyze_architecture_quality(ir)
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+    return JSONResponse(content=report)
 
 
 @app.get("/api/diagrams/{diagram_id}/styling/audit", response_model=List[StylingAuditResponse])
@@ -671,6 +728,54 @@ def mcp_tool_export_svg(diagram_id: str, db: DbSession = Depends(get_db)):
 def mcp_tool_export_gif(diagram_id: str, db: DbSession = Depends(get_db)):
     result = mcp_tool_adapter.export_gif(diagram_id, db=db)
     return JSONResponse(content=result)
+
+
+@app.post("/api/ingest")
+def enqueue_ingest_api(payload: dict, db: DbSession = Depends(get_db)):
+    """Enqueue a repository ingestion job.
+
+    Expected payload: { repo_url: str, session_id?: str, user_prompt?: str }
+    """
+    repo_url = (payload or {}).get("repo_url")
+    if not repo_url:
+        return JSONResponse(status_code=400, content={"error": "repo_url is required"})
+    session_id = (payload or {}).get("session_id")
+    user_prompt = (payload or {}).get("user_prompt")
+
+    session = None
+    if session_id:
+        session = get_session(db, session_id)
+    if not session:
+        session = create_session(db)
+
+    try:
+        job = enqueue_ingest_job(repo_url=repo_url, session_id=session.id, user_prompt=user_prompt)
+    except NameError:
+        return JSONResponse(status_code=501, content={"error": "enqueue_ingest_job not implemented"})
+
+    return JSONResponse(status_code=202, content={"job_id": str(job.id), "session_id": str(session.id), "status": getattr(job, "status", "queued")})
+
+
+@app.get("/api/ingest/{job_id}")
+def ingest_status_api(job_id: str):
+    try:
+        job = get_job(job_id)
+    except NameError:
+        return JSONResponse(status_code=501, content={"error": "get_job not implemented"})
+    if not job:
+        return JSONResponse(status_code=404, content={"error": "Job not found"})
+    payload = {
+        "id": str(job.id),
+        "session_id": str(getattr(job, "session_id", "")),
+        "repo_url": getattr(job, "repo_url", None),
+        "commit_hash": getattr(job, "commit_hash", None),
+        "status": getattr(job, "status", None),
+        "result": getattr(job, "result", None),
+        "error": getattr(job, "error", None),
+        "created_at": (getattr(job, "created_at", None).isoformat() if getattr(job, "created_at", None) is not None else None),
+        "updated_at": (getattr(job, "updated_at", None).isoformat() if getattr(job, "updated_at", None) is not None else None),
+    }
+    return JSONResponse(status_code=200, content=payload)
 
 
 @app.get("/api/debug/modules")

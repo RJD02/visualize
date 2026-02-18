@@ -24,6 +24,7 @@ from src.renderers.structurizr_renderer import render_structurizr_svg
 from src.renderers.translator import ir_to_mermaid, ir_to_plantuml, ir_to_structurizr_dsl
 from src.services.intent import explain_architecture
 from src.services.styling_audit_service import record_styling_audit
+from src.services.agent_trace_service import record_trace
 from src.tools.github_ingest import ingest_github_repo
 from src.tools.image_versioning import add_version
 from src.tools.plantuml_renderer import generate_plantuml_from_plan, render_diagrams, render_llm_plantuml
@@ -54,7 +55,7 @@ _COLOR_ALIASES = {
 }
 
 _COLOR_PATTERN = re.compile(
-    r"(#?[0-9a-fA-F]{3,8}|" + "|".join(sorted({c for c in _COLOR_ALIASES}, key=len, reverse=True)) + r")",
+    r"(?<!\w)(#[0-9a-fA-F]{3,8}|" + "|".join(sorted({c for c in _COLOR_ALIASES}, key=len, reverse=True)) + r")\b",
     re.IGNORECASE,
 )
 
@@ -164,9 +165,24 @@ def extract_styling_intent(value: typing.Union[str, dict, None]) -> Dict[str, An
     elif "vibrant" in lowered:
         intent["theme"] = "vibrant"
 
+    # Detect explicit "X background" / "background X" pattern first
+    bg_match = re.search(
+        r"(?:(\w+)\s+background|background\s+(?:color\s+)?(?:is\s+|=\s*)?(\w+))",
+        lowered,
+    )
+    bg_color_word: str | None = None
+    if bg_match:
+        bg_color_word = (bg_match.group(1) or bg_match.group(2) or "").strip()
+        resolved_bg = _resolve_color(bg_color_word)
+        if resolved_bg != "#333333":  # valid color
+            intent["blockColors"]["background"] = resolved_bg
+
     found_colors: list[str] = []
     for match in _COLOR_PATTERN.findall(text):
         normalized = _resolve_color(match)
+        # Skip colors already assigned as background
+        if bg_color_word and match.lower() == bg_color_word.lower():
+            continue
         if normalized not in found_colors:
             found_colors.append(normalized)
 
@@ -208,6 +224,8 @@ def _build_mermaid_style_block(intent: dict) -> str:
         theme_vars.setdefault("primaryBorderColor", theme_vars["primaryColor"])
     if block_colors.get("secondary"):
         theme_vars["secondaryColor"] = _resolve_color(block_colors["secondary"])
+    if block_colors.get("background"):
+        theme_vars["background"] = _resolve_color(block_colors["background"])
     if text_style.get("fontColor"):
         theme_vars["primaryTextColor"] = _resolve_color(text_style["fontColor"])
     if edge_style.get("strokeColor"):
@@ -476,6 +494,310 @@ def _build_plantuml_style_block(intent: dict) -> str:
     return "\n".join(lines)
 
 
+def apply_ir_node_styles_to_svg(svg_text: str, ir_json: dict) -> str:
+    """Apply per-node styling from the IR's node_style fields to the SVG.
+
+    This bridges the gap between the IR data model (which carries per-node
+    fillColor, borderColor, textColor, shape, etc.) and the rendered SVG
+    (which may come from Mermaid-cli, custom IR renderer, or PlantUML).
+
+    Works with BOTH SVG flavours:
+    - Custom IR renderer: nodes have ``data-block-id="<node_id>"`` on ``<g>``
+      groups, child ``<rect class="node-rect">`` and ``<text class="node-text">``.
+    - Mermaid-cli: nodes have ``id="flowchart-<slug>-<n>"`` on ``<g class="node
+      default">`` groups, child ``<rect class="basic label-container">``.
+
+    Returns the modified SVG string.
+    """
+    # Navigate into enriched_ir when nodes are nested (real DB IR structure)
+    _inner = ir_json.get("enriched_ir") if isinstance(ir_json.get("enriched_ir"), dict) else None
+    nodes = ir_json.get("nodes") or (_inner.get("nodes") if _inner else None) or []
+    if not nodes:
+        return svg_text
+
+    # Build a lookup: node_id -> node_style dict, and node_id -> shape
+    style_map: dict[str, dict] = {}
+    label_map: dict[str, dict] = {}
+    shape_map: dict[str, str] = {}
+    for node in nodes:
+        nid = str(node.get("node_id") or node.get("id") or "")
+        style = node.get("node_style") or {}
+        if nid and style:
+            style_map[nid] = style
+        label = str(node.get("label") or "").strip()
+        if label and style:
+            label_map[label.lower()] = style
+        # Track shape for geometry changes (circle, diamond, cylinder, etc.)
+        node_shape = str(node.get("shape") or "").strip().lower()
+        if nid and node_shape:
+            shape_map[nid] = node_shape
+
+    if not style_map and not label_map and not shape_map:
+        return svg_text
+
+    try:
+        parser = ET.XMLParser(encoding="utf-8")
+        root = ET.fromstring(svg_text.encode("utf-8"), parser=parser)
+    except Exception:
+        return svg_text
+
+    # Strategy 1: Custom IR renderer — groups with data-block-id attribute
+    for group in root.iter():
+        block_id = group.get("data-block-id")
+        if not block_id:
+            continue
+        style = style_map.get(block_id)
+        if style:
+            _apply_style_to_group(group, style)
+        target_shape = shape_map.get(block_id)
+        if target_shape:
+            _replace_shape_in_group(group, target_shape)
+
+    # Strategy 2: Mermaid-cli — groups with class containing "node" and
+    # id like "flowchart-<slug>-<n>".  Match by mapping node labels to
+    # the text content inside each group.
+    SVG_NS = "{http://www.w3.org/2000/svg}"
+    XHTML_NS = "{http://www.w3.org/1999/xhtml}"
+    for group in root.iter():
+        cls = group.get("class", "")
+        if "node" not in cls.split():
+            continue
+        # Extract label text from this Mermaid node group
+        node_text = _extract_mermaid_node_text(group, SVG_NS, XHTML_NS)
+        if not node_text:
+            continue
+        # Match against label_map
+        style = label_map.get(node_text.lower())
+        if not style:
+            # fuzzy: try partial match
+            for lbl, s in label_map.items():
+                if lbl in node_text.lower() or node_text.lower() in lbl:
+                    style = s
+                    break
+        if style:
+            _apply_style_to_mermaid_node(group, style, SVG_NS, XHTML_NS)
+
+    try:
+        return ET.tostring(root, encoding="unicode")
+    except Exception:
+        return svg_text
+
+
+def _extract_mermaid_node_text(group, SVG_NS: str, XHTML_NS: str) -> str:
+    """Extract the visible label text from a Mermaid node <g> group."""
+    # Try foreignObject -> span.nodeLabel
+    for fo in group.iter(f"{SVG_NS}foreignObject"):
+        for span in fo.iter(f"{XHTML_NS}span"):
+            if "nodeLabel" in (span.get("class") or ""):
+                txt = "".join(span.itertext()).strip()
+                if txt:
+                    return txt
+        # Also check raw div/p text
+        for div in fo.iter(f"{XHTML_NS}div"):
+            txt = "".join(div.itertext()).strip()
+            if txt:
+                return txt
+    # Fallback: SVG <text> element
+    for t in group.iter(f"{SVG_NS}text"):
+        txt = "".join(t.itertext()).strip()
+        if txt:
+            return txt
+    # Last resort: any text
+    for t in group.iter():
+        if t.tag.endswith("text"):
+            txt = "".join(t.itertext()).strip()
+            if txt:
+                return txt
+    return ""
+
+
+def _replace_shape_in_group(group, target_shape: str):
+    """Replace the geometry element inside a custom-IR-renderer <g> group.
+
+    Supported target shapes: circle, ellipse, diamond, hexagon, cylinder, rect/rounded.
+    The original <rect class="node-rect"> is replaced with an SVG element that
+    visually represents the requested shape, preserving position and size.
+    """
+    # Find the existing shape element (rect, circle, ellipse, etc.)
+    existing = None
+    existing_idx = None
+    for idx, child in enumerate(group):
+        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        if tag in ("rect", "circle", "ellipse", "polygon", "path") and "node-rect" in (child.get("class") or tag):
+            existing = child
+            existing_idx = idx
+            break
+    if existing is None:
+        # fallback: grab first shape element
+        for idx, child in enumerate(group):
+            tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            if tag in ("rect", "circle", "ellipse", "polygon", "path"):
+                existing = child
+                existing_idx = idx
+                break
+    if existing is None or existing_idx is None:
+        return
+
+    # Extract geometry from the existing element
+    tag = existing.tag.split("}")[-1] if "}" in existing.tag else existing.tag
+    ns_prefix = existing.tag[: existing.tag.index("}") + 1] if "}" in existing.tag else ""
+    fill = existing.get("fill", "none")
+    stroke = existing.get("stroke", "#64748b")
+    stroke_width = existing.get("stroke-width", "1")
+    stroke_dash = existing.get("stroke-dasharray")
+    elem_class = existing.get("class", "")
+    elem_id = existing.get("id", "")
+
+    if tag == "rect":
+        x = float(existing.get("x", 0))
+        y = float(existing.get("y", 0))
+        w = float(existing.get("width", 140))
+        h = float(existing.get("height", 48))
+    elif tag == "circle":
+        cx = float(existing.get("cx", 70))
+        cy = float(existing.get("cy", 24))
+        r = float(existing.get("r", 24))
+        x, y, w, h = cx - r, cy - r, r * 2, r * 2
+    elif tag == "ellipse":
+        cx = float(existing.get("cx", 70))
+        cy = float(existing.get("cy", 24))
+        rx = float(existing.get("rx", 70))
+        ry = float(existing.get("ry", 24))
+        x, y, w, h = cx - rx, cy - ry, rx * 2, ry * 2
+    else:
+        x, y, w, h = 0, 0, 140, 48
+
+    cx, cy = x + w / 2, y + h / 2
+
+    # Current shape already matches target?
+    _SHAPE_TAG = {
+        "circle": "circle", "ellipse": "ellipse", "oval": "ellipse",
+        "rect": "rect", "rectangle": "rect", "rounded": "rect", "box": "rect", "square": "rect",
+        "diamond": "polygon", "hexagon": "polygon",
+        "cylinder": "ellipse",
+    }
+    target_tag = _SHAPE_TAG.get(target_shape, target_shape)
+    if target_tag == tag and target_shape not in ("diamond", "hexagon", "cylinder"):
+        return  # already correct shape
+
+    # Build replacement element
+    new_elem = None
+    if target_shape == "circle":
+        r = min(w, h) / 2
+        new_elem = ET.Element(f"{ns_prefix}circle" if ns_prefix else "circle")
+        new_elem.set("cx", str(cx))
+        new_elem.set("cy", str(cy))
+        new_elem.set("r", str(r))
+    elif target_shape in ("ellipse", "oval"):
+        new_elem = ET.Element(f"{ns_prefix}ellipse" if ns_prefix else "ellipse")
+        new_elem.set("cx", str(cx))
+        new_elem.set("cy", str(cy))
+        new_elem.set("rx", str(w / 2))
+        new_elem.set("ry", str(h / 2))
+    elif target_shape == "diamond":
+        points = f"{cx},{y} {x + w},{cy} {cx},{y + h} {x},{cy}"
+        new_elem = ET.Element(f"{ns_prefix}polygon" if ns_prefix else "polygon")
+        new_elem.set("points", points)
+    elif target_shape == "hexagon":
+        dx = w * 0.2
+        points = f"{x + dx},{y} {x + w - dx},{y} {x + w},{cy} {x + w - dx},{y + h} {x + dx},{y + h} {x},{cy}"
+        new_elem = ET.Element(f"{ns_prefix}polygon" if ns_prefix else "polygon")
+        new_elem.set("points", points)
+    elif target_shape == "cylinder":
+        # Approximate with an ellipse (visual shorthand for database shape)
+        new_elem = ET.Element(f"{ns_prefix}ellipse" if ns_prefix else "ellipse")
+        new_elem.set("cx", str(cx))
+        new_elem.set("cy", str(cy))
+        new_elem.set("rx", str(w / 2))
+        new_elem.set("ry", str(h / 2))
+    else:
+        # Default: rect (covers rect, rounded, box, square)
+        new_elem = ET.Element(f"{ns_prefix}rect" if ns_prefix else "rect")
+        new_elem.set("x", str(x))
+        new_elem.set("y", str(y))
+        new_elem.set("width", str(w))
+        new_elem.set("height", str(h))
+        if target_shape == "rounded":
+            new_elem.set("rx", "8")
+            new_elem.set("ry", "8")
+
+    if new_elem is None:
+        return
+
+    # Carry over visual attributes
+    new_elem.set("fill", fill)
+    new_elem.set("stroke", stroke)
+    new_elem.set("stroke-width", stroke_width)
+    if stroke_dash:
+        new_elem.set("stroke-dasharray", stroke_dash)
+    if elem_class:
+        new_elem.set("class", elem_class)
+    if elem_id:
+        new_elem.set("id", elem_id)
+
+    # Replace the old element in the group
+    group.remove(existing)
+    group.insert(existing_idx, new_elem)
+
+
+def _apply_style_to_group(group, style: dict):
+    """Apply IR node_style to a custom-IR-renderer SVG <g> group."""
+    for child in group:
+        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        if tag in ("rect", "circle", "ellipse", "polygon", "path"):
+            if style.get("fillColor"):
+                child.set("fill", _resolve_color(style["fillColor"]))
+            if style.get("borderColor"):
+                child.set("stroke", _resolve_color(style["borderColor"]))
+            if style.get("borderWidth"):
+                child.set("stroke-width", str(style["borderWidth"]))
+            if style.get("borderStyle") == "dashed":
+                child.set("stroke-dasharray", "6,3")
+            elif style.get("borderStyle") == "dotted":
+                child.set("stroke-dasharray", "2,2")
+            elif style.get("borderStyle") == "none":
+                child.set("stroke", "none")
+        elif tag == "text":
+            if style.get("textColor"):
+                child.set("fill", _resolve_color(style["textColor"]))
+            if style.get("fontSize"):
+                child.set("font-size", str(style["fontSize"]))
+            if style.get("fontFamily"):
+                child.set("font-family", style["fontFamily"])
+
+
+def _apply_style_to_mermaid_node(group, style: dict, SVG_NS: str, XHTML_NS: str):
+    """Apply IR node_style to a Mermaid-cli SVG node <g> group."""
+    # Shape elements: rect, circle, polygon, path inside the node group
+    for child in group:
+        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        cls = child.get("class", "")
+        # Mermaid node shapes have class like "basic label-container"
+        if tag in ("rect", "circle", "ellipse", "polygon", "path") and "label" not in cls:
+            if style.get("fillColor"):
+                child.set("fill", _resolve_color(style["fillColor"]))
+            if style.get("borderColor"):
+                child.set("stroke", _resolve_color(style["borderColor"]))
+            if style.get("borderWidth"):
+                child.set("stroke-width", str(style["borderWidth"]))
+        # Rects with "basic label-container" are the main shape in Mermaid
+        if tag == "rect" and "label-container" in cls:
+            if style.get("fillColor"):
+                child.set("fill", _resolve_color(style["fillColor"]))
+                child.set("style", f"fill: {_resolve_color(style['fillColor'])} !important;")
+            if style.get("borderColor"):
+                child.set("stroke", _resolve_color(style["borderColor"]))
+    # Text color in Mermaid uses foreignObject -> span
+    if style.get("textColor"):
+        tc = _resolve_color(style["textColor"])
+        for fo in group.iter(f"{SVG_NS}foreignObject"):
+            for span in fo.iter(f"{XHTML_NS}span"):
+                existing = span.get("style", "")
+                span.set("style", f"{existing}; color: {tc} !important;")
+        for t in group.iter(f"{SVG_NS}text"):
+            t.set("fill", tc)
+
+
 def apply_post_svg_styles(svg_text: str, intent: dict, return_details: bool = False):
     """Parse SVG and inject scoped <style> block and inline attribute changes.
 
@@ -492,27 +814,61 @@ def apply_post_svg_styles(svg_text: str, intent: dict, return_details: bool = Fa
 
     nsmap = {k: v for k, v in root.attrib.items() if k.startswith("xmlns")}
 
+    # Detect SVG id for scoped selectors (Mermaid uses id="my-svg")
+    svg_id = root.get("id", "")
+    prefix = f"#{svg_id} " if svg_id else ""
+
     style_rules: list[str] = []
-    # Block colors -> apply to rects and elements with class 'node' or 'component'
+
+    # Background color (third found color or explicit request)
+    bg_color = intent.get("blockColors", {}).get("background")
+    if bg_color:
+        style_rules.append(f"{prefix.strip() or 'svg'} {{ background-color: {_resolve_color(bg_color)} !important; }}")
+
+    # Block colors -> apply to node shapes in both Mermaid-cli and custom IR SVGs
     primary = intent.get("blockColors", {}).get("primary")
     secondary = intent.get("blockColors", {}).get("secondary")
     if primary:
-        style_rules.append(f".node, .component, rect {{ fill: {_resolve_color(primary)} !important; }}")
+        pc = _resolve_color(primary)
+        # Mermaid-cli: node shapes are rect/circle/ellipse/polygon/path inside .node groups
+        style_rules.append(f"{prefix}.node rect, {prefix}.node circle, {prefix}.node ellipse, "
+                           f"{prefix}.node polygon, {prefix}.node path {{ fill: {pc} !important; }}")
+        # Mermaid sequence diagram actors
+        style_rules.append(f"{prefix}.actor {{ fill: {pc} !important; }}")
+        # Custom IR renderer fallback
+        style_rules.append(f"{prefix}.node-rect {{ fill: {pc} !important; }}")
     if secondary:
-        style_rules.append(f".node.secondary, .component.secondary {{ fill: {_resolve_color(secondary)} !important; }}")
+        sc = _resolve_color(secondary)
+        # Apply secondary color to every other node via nth-child
+        style_rules.append(f"{prefix}.node:nth-child(even) rect, {prefix}.node:nth-child(even) circle, "
+                           f"{prefix}.node:nth-child(even) ellipse, {prefix}.node:nth-child(even) polygon, "
+                           f"{prefix}.node:nth-child(even) path {{ fill: {sc} !important; }}")
+        style_rules.append(f"{prefix}.node-rect.secondary {{ fill: {sc} !important; }}")
 
-    # Text styles
+    # Text styles — Mermaid uses both SVG <text> and HTML .nodeLabel spans
     txt = intent.get("textStyle", {})
     if txt.get("fontWeight"):
-        style_rules.append(f"text {{ font-weight: {txt['fontWeight']} !important; }}")
+        style_rules.append(f"{prefix}text {{ font-weight: {txt['fontWeight']} !important; }}")
+        style_rules.append(f"{prefix}.nodeLabel {{ font-weight: {txt['fontWeight']} !important; }}")
     if txt.get("fontColor"):
-        style_rules.append(f"text {{ fill: {_resolve_color(txt['fontColor'])} !important; }}")
+        fc = _resolve_color(txt["fontColor"])
+        style_rules.append(f"{prefix}text {{ fill: {fc} !important; }}")
+        # Mermaid flowchart labels use HTML inside foreignObject
+        style_rules.append(f"{prefix}.nodeLabel, {prefix}.nodeLabel p {{ color: {fc} !important; }}")
+        style_rules.append(f"{prefix}.edgeLabel, {prefix}.edgeLabel p {{ color: {fc} !important; }}")
 
     # Edge styles
     edge = intent.get("edgeStyle", {})
     if edge.get("strokeColor"):
-        style_rules.append(f"path, line {{ stroke: {_resolve_color(edge['strokeColor'])} !important; }}")
+        ec = _resolve_color(edge["strokeColor"])
+        style_rules.append(f"{prefix}.flowchart-link, {prefix}.edgePath .path {{ stroke: {ec} !important; }}")
+        style_rules.append(f"{prefix}.messageLine0, {prefix}.messageLine1 {{ stroke: {ec} !important; }}")
+        # Arrowheads
+        style_rules.append(f"{prefix}.arrowMarkerPath, {prefix}.arrowheadPath {{ fill: {ec} !important; stroke: {ec} !important; }}")
+        # Fallback for generic SVG
+        style_rules.append(f"path, line {{ stroke: {ec} !important; }}")
     if edge.get("strokeWidth"):
+        style_rules.append(f"{prefix}.flowchart-link, {prefix}.edgePath .path {{ stroke-width: {edge['strokeWidth']} !important; }}")
         style_rules.append(f"path, line {{ stroke-width: {edge['strokeWidth']} !important; }}")
 
     if style_rules:
@@ -707,6 +1063,212 @@ def tool_svg_styling_agent(
     if renderingService and "rendering_service" not in result_payload:
         result_payload["rendering_service"] = renderingService
     return result_payload
+
+
+def tool_styling_transform_agent(
+    context: Dict[str, typing.Any],
+    ir: typing.Optional[dict],
+    user_edit_suggestion: typing.Optional[str] = None,
+    mode: str = "style_only",
+    constraints: typing.Optional[dict] = None,
+) -> Dict[str, typing.Any]:
+    """Pure transformation Styling Agent.
+
+    Accepts the current `ir` (dictionary), a `user_edit_suggestion`, optional `mode` and `constraints`.
+    Returns one of:
+      - {"patch_ops": [...]} (preferred – minimalistic delta)
+      - {"updated_ir": {...}} (fallback – full copy with minimal edits)
+      - {"error": "...", "explanation": "..."}
+
+    This implementation uses deterministic heuristics to interpret common edit
+    suggestions.  It is intentionally **minimalistic**: it returns only the
+    smallest set of patch_ops needed to honour the user's request and leaves
+    every other field of the IR untouched.
+
+    It does NOT perform side-effects and does not call Main Agent.
+    """
+    if ir is None:
+        return {"error": "no_ir", "explanation": "No IR provided to styling agent"}
+
+    suggestion = (user_edit_suggestion or "").strip()
+    if not suggestion:
+        return {"error": "no_suggestion", "explanation": "No edit suggestion provided"}
+
+    lowered = suggestion.lower()
+
+    # Navigate into enriched_ir when nodes/edges are nested (real DB IR structure)
+    _inner = ir.get("enriched_ir") if isinstance(ir.get("enriched_ir"), dict) else None
+    nodes = ir.get("nodes") or (_inner.get("nodes") if _inner else None) or []
+    edges = ir.get("edges") or (_inner.get("edges") if _inner else None) or []
+    patch_ops: list[dict] = []
+
+    # ── helpers ────────────────────────────────────────────────────────────
+    def _find_node(target: str):
+        """Find a node whose label or id contains `target`."""
+        target = target.strip().lower()
+        for n in nodes:
+            label = str(n.get("label") or "").lower()
+            nid = str(n.get("node_id") or n.get("id") or "").lower()
+            if target == label or target == nid:
+                return n
+        # fuzzy: substring
+        for n in nodes:
+            label = str(n.get("label") or "").lower()
+            nid = str(n.get("node_id") or n.get("id") or "").lower()
+            if target in label or target in nid:
+                return n
+        return None
+
+    def _node_id(node: dict) -> str:
+        return node.get("node_id") or node.get("id") or ""
+
+    # ── 1.  Shape changes (circular, diamond, hexagon, rectangle …) ───────
+    _SHAPE_KEYWORDS = {
+        "circular": "circle", "circle": "circle", "round": "circle",
+        "diamond": "diamond", "rhombus": "diamond",
+        "hexagon": "hexagon", "hex": "hexagon",
+        "rectangle": "rect", "rect": "rect", "square": "rect", "box": "rect",
+        "cylinder": "cylinder", "database": "cylinder", "db": "cylinder",
+        "ellipse": "ellipse", "oval": "ellipse",
+    }
+    for shape_kw, shape_val in _SHAPE_KEYWORDS.items():
+        m = re.search(
+            rf"make\s+(?:the\s+)?(.+?)\s+(?:block|node|component|service)?\s*{shape_kw}"
+            rf"|make\s+(.+?)\s+{shape_kw}",
+            lowered,
+        )
+        if m:
+            target_name = (m.group(1) or m.group(2) or "").strip()
+            matched = _find_node(target_name)
+            if matched:
+                nid = _node_id(matched)
+                patch_ops.append({"op": "replace", "path": f"/nodes/{nid}/shape", "value": shape_val})
+                return {"patch_ops": patch_ops}
+
+    # ── 2.  Colour / color changes ────────────────────────────────────────
+    m = re.search(
+        r"(?:change|set|make|paint|color|colour)\s+(?:the\s+)?(.+?)\s+"
+        r"(?:block|node|component|service)?\s*(?:color|colour)?\s*(?:to\s+)?\s*"
+        r"(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)\s*$",
+        lowered,
+    )
+    if m:
+        target_name = m.group(1).strip()
+        color_raw = m.group(2).strip()
+        color_val = _resolve_color(color_raw)
+        matched = _find_node(target_name)
+        if matched:
+            nid = _node_id(matched)
+            patch_ops.append({"op": "replace", "path": f"/nodes/{nid}/node_style/fillColor", "value": color_val})
+            return {"patch_ops": patch_ops}
+
+    # ── 3.  Label / rename changes ────────────────────────────────────────
+    m = re.search(
+        r"(?:rename|relabel|change\s+(?:the\s+)?label\s+(?:of\s+)?)(?:the\s+)?(.+?)\s+(?:to|as|→|->)\s+(.+)",
+        lowered,
+    )
+    if m:
+        target_name = m.group(1).strip()
+        new_label = m.group(2).strip()
+        matched = _find_node(target_name)
+        if matched:
+            nid = _node_id(matched)
+            # Keep the label case from the user (use original suggestion)
+            raw_new = suggestion[m.start(2):m.end(2)].strip() or new_label
+            patch_ops.append({"op": "replace", "path": f"/nodes/{nid}/label", "value": raw_new})
+            return {"patch_ops": patch_ops}
+
+    # ── 4.  Border / stroke style changes ─────────────────────────────────
+    m = re.search(
+        r"(?:make|set|change)\s+(?:the\s+)?(.+?)\s+(?:block|node)?\s*"
+        r"(?:border|stroke|outline)\s*(?:to\s+|=\s*)?(dashed|dotted|solid|thick|thin|bold|none|\d+)",
+        lowered,
+    )
+    if m:
+        target_name = m.group(1).strip()
+        style_val = m.group(2).strip()
+        matched = _find_node(target_name)
+        if matched:
+            nid = _node_id(matched)
+            if style_val in {"dashed", "dotted", "solid", "none"}:
+                patch_ops.append({"op": "replace", "path": f"/nodes/{nid}/node_style/borderStyle", "value": style_val})
+            elif style_val in {"thick", "bold"}:
+                patch_ops.append({"op": "replace", "path": f"/nodes/{nid}/node_style/borderWidth", "value": 3})
+            elif style_val == "thin":
+                patch_ops.append({"op": "replace", "path": f"/nodes/{nid}/node_style/borderWidth", "value": 1})
+            elif style_val.isdigit():
+                patch_ops.append({"op": "replace", "path": f"/nodes/{nid}/node_style/borderWidth", "value": int(style_val)})
+            if patch_ops:
+                return {"patch_ops": patch_ops}
+
+    # ── 5.  Hide / show a node ────────────────────────────────────────────
+    m = re.search(r"(?:hide|remove|delete)\s+(?:the\s+)?(.+?)\s*(?:block|node|component|service)?", lowered)
+    if m:
+        target_name = m.group(1).strip()
+        matched = _find_node(target_name)
+        if matched:
+            nid = _node_id(matched)
+            patch_ops.append({"op": "replace", "path": f"/nodes/{nid}/node_style/visible", "value": False})
+            return {"patch_ops": patch_ops}
+
+    m = re.search(r"(?:show|unhide|reveal)\s+(?:the\s+)?(.+?)\s*(?:block|node|component|service)?", lowered)
+    if m:
+        target_name = m.group(1).strip()
+        matched = _find_node(target_name)
+        if matched:
+            nid = _node_id(matched)
+            patch_ops.append({"op": "replace", "path": f"/nodes/{nid}/node_style/visible", "value": True})
+            return {"patch_ops": patch_ops}
+
+    # ── 6.  Zone reorder ──────────────────────────────────────────────────
+    zone_order = ir.get("zone_order") or []
+    m_above = re.search(r"move\s+(.+?)\s+above\s+(.+)", lowered)
+    m_below = re.search(r"move\s+(.+?)\s+below\s+(.+)", lowered)
+    if m_above or m_below:
+        match = m_above or m_below
+        frag1 = match.group(1).strip()
+        frag2 = match.group(2).strip()
+
+        def _match_zone(fragment: str):
+            for z in zone_order:
+                if z.replace("_", " ") in fragment or z in fragment or fragment in z.replace("_", " "):
+                    return z
+            return None
+
+        z1 = _match_zone(frag1)
+        z2 = _match_zone(frag2)
+        if z1 and z2 and z1 != z2:
+            new_order = [z for z in zone_order if z not in {z1, z2}]
+            if m_above:
+                idx = 0
+                new_order.insert(idx, z1)
+                new_order.insert(idx + 1, z2)
+            else:
+                idx = 0
+                new_order.insert(idx, z2)
+                new_order.insert(idx + 1, z1)
+            patch_ops.append({"op": "replace", "path": "/zone_order", "value": new_order})
+            return {"patch_ops": patch_ops}
+
+    # ── 7.  Global intent / theme tweaks ──────────────────────────────────
+    for theme_kw in ("pastel", "dark", "vibrant", "minimal", "corporate"):
+        if theme_kw in lowered and ("theme" in lowered or "style" in lowered or "look" in lowered or theme_kw == lowered.strip()):
+            patch_ops.append({"op": "replace", "path": "/globalIntent/mood", "value": theme_kw})
+            return {"patch_ops": patch_ops}
+
+    # ── 8.  Edge colour / style ───────────────────────────────────────────
+    m = re.search(
+        r"(?:change|set|make)\s+(?:the\s+)?(?:edge|line|arrow|connection)s?\s*(?:color|colour)?\s*(?:to\s+)?"
+        r"(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)",
+        lowered,
+    )
+    if m:
+        color_val = _resolve_color(m.group(1).strip())
+        patch_ops.append({"op": "replace", "path": "/globalIntent/edgeColor", "value": color_val})
+        return {"patch_ops": patch_ops}
+
+    # ── If nothing matched, return controlled error ───────────────────────
+    return {"error": "unhandled_suggestion", "explanation": "Styling agent could not interpret the suggestion deterministically"}
 
 
 def _normalize_renderer_input(renderer_input: typing.Any) -> dict | None:
@@ -1533,12 +2095,31 @@ def tool_edit_diagram_ir(
     db: DbSession = context["db"]
     ir: DiagramIR | None = None
     if ir_id:
-        ir = db.get(DiagramIR, _parse_uuid(ir_id))
-    elif session_id:
-        rows = db.query(DiagramIR).filter(DiagramIR.session_id == _parse_uuid(session_id)).order_by(DiagramIR.version.desc()).all()
-        ir = rows[0] if rows else None
+        try:
+            ir = db.get(DiagramIR, _parse_uuid(ir_id))
+        except Exception:
+            ir = None
+    if not ir and session_id:
+        try:
+            rows = db.query(DiagramIR).filter(DiagramIR.session_id == _parse_uuid(session_id)).order_by(DiagramIR.version.desc()).all()
+            ir = rows[0] if rows else None
+        except Exception:
+            ir = None
+    # Fallback: resolve session from context when both explicit lookups fail
+    if not ir:
+        ctx_session = context.get("session")
+        ctx_session_id = context.get("session_id")
+        fallback_sid = getattr(ctx_session, "id", None) or ctx_session_id
+        if fallback_sid:
+            try:
+                rows = db.query(DiagramIR).filter(DiagramIR.session_id == _parse_uuid(str(fallback_sid))).order_by(DiagramIR.version.desc()).all()
+                ir = rows[0] if rows else None
+            except Exception:
+                ir = None
     if not ir:
         raise ValueError("No IR version available to edit")
+    # Build canonical IR payload to send to the Styling/Transformation Agent
+    current_ir_json = ir.ir_json if getattr(ir, "ir_json", None) else None
     svg_text = ir.svg_text or ""
     if not svg_text:
         image = db.query(Image).filter(Image.ir_id == ir.id).order_by(Image.version.desc()).first()
@@ -1550,8 +2131,105 @@ def tool_edit_diagram_ir(
     if not svg_text:
         raise ValueError("No SVG content available to edit")
 
-    edited_svg = edit_ir_svg(svg_text, instruction)
-    return {"ir_entries": [{"diagram_type": ir.diagram_type, "svg": edited_svg, "svg_file": None, "parent_ir_id": str(ir.id)}]}
+    # Route edit intent to the Styling Transform Agent (pure, no side-effects)
+    import time as _time
+    _t0 = _time.perf_counter()
+    transform_result = tool_styling_transform_agent(context=context, ir=current_ir_json, user_edit_suggestion=instruction)
+    _transform_ms = int((_time.perf_counter() - _t0) * 1000)
+
+    # ── Trace: styling transform agent decision ──
+    _ctx_db = context.get("db")
+    _ctx_sid = context.get("session_id") or (getattr(context.get("session"), "id", None))
+    if _ctx_db and _ctx_sid:
+        _transform_input = {
+            "instruction": instruction,
+            "ir_id": str(ir.id) if ir else None,
+            "ir_node_count": len((current_ir_json or {}).get("enriched_ir", current_ir_json or {}).get("nodes", [])) if current_ir_json else 0,
+        }
+        _transform_out = {}
+        if isinstance(transform_result, dict):
+            if transform_result.get("patch_ops"):
+                _transform_out["patch_ops_count"] = len(transform_result["patch_ops"])
+                _transform_out["patch_ops"] = transform_result["patch_ops"]
+            elif transform_result.get("updated_ir"):
+                _transform_out["has_updated_ir"] = True
+            elif transform_result.get("error"):
+                _transform_out["error"] = transform_result["error"]
+                _transform_out["explanation"] = transform_result.get("explanation")
+        record_trace(
+            _ctx_db,
+            session_id=_ctx_sid,
+            agent_name="styling_transform_agent",
+            input_summary=_transform_input,
+            output_summary=_transform_out,
+            decision=("patch_ops" if (isinstance(transform_result, dict) and transform_result.get("patch_ops"))
+                       else "updated_ir" if (isinstance(transform_result, dict) and transform_result.get("updated_ir"))
+                       else transform_result.get("error", "unknown") if isinstance(transform_result, dict)
+                       else "invalid"),
+            duration_ms=_transform_ms,
+        )
+
+    # Validate contract and return structured result for the Main Agent to apply deterministically
+    if not isinstance(transform_result, dict):
+        return {"error": "invalid_response", "message": "Styling agent returned non-dict response"}
+
+    # Allow the Main Agent (session_service) to handle patch_ops or updated_ir
+    out: Dict[str, Any] = {}
+    if transform_result.get("patch_ops"):
+        out["patch_ops"] = transform_result.get("patch_ops")
+        out["parent_ir_id"] = str(ir.id)
+        out["diagram_type"] = ir.diagram_type
+        out["svg"] = svg_text
+    elif transform_result.get("updated_ir"):
+        out["updated_ir"] = transform_result.get("updated_ir")
+        out["parent_ir_id"] = str(ir.id)
+        out["diagram_type"] = ir.diagram_type
+        out["svg"] = svg_text
+    else:
+        # No structured patch provided.  Try to apply a minimal zone-reorder
+        # via the legacy helper and then merge the reordered zone_order back
+        # into the *existing* IR as a patch — avoiding a full SVG rebuild.
+        import copy as _copy
+        try:
+            edited_svg = edit_ir_svg(svg_text, instruction)
+            # Extract just the zone_order delta from the edited SVG metadata
+            import xml.etree.ElementTree as _ET
+            edited_root = _ET.fromstring(edited_svg)
+            edited_meta = None
+            for el in edited_root.iter():
+                if el.tag.endswith("metadata") and el.text:
+                    edited_meta = el
+                    break
+            if edited_meta is not None and edited_meta.text:
+                edited_payload = json.loads(edited_meta.text)
+                parent_ir_json = _copy.deepcopy(current_ir_json) if current_ir_json else {}
+                new_zone_order = edited_payload.get("zone_order")
+                old_zone_order = parent_ir_json.get("zone_order")
+                if new_zone_order and new_zone_order != old_zone_order:
+                    # Apply only the zone_order change to the existing full IR
+                    parent_ir_json["zone_order"] = new_zone_order
+                    out = {
+                        "updated_ir": parent_ir_json,
+                        "parent_ir_id": str(ir.id),
+                        "diagram_type": ir.diagram_type,
+                        "svg": svg_text,  # keep original SVG; will be re-rendered
+                    }
+                else:
+                    # No zone change detected — use edited SVG but keep full IR
+                    out = {
+                        "svg": edited_svg,
+                        "parent_ir_id": str(ir.id),
+                        "diagram_type": ir.diagram_type,
+                    }
+            else:
+                out = {"svg": edited_svg, "parent_ir_id": str(ir.id), "diagram_type": ir.diagram_type}
+        except Exception:
+            out = {
+                "error": transform_result.get("error") or "no_change",
+                "message": transform_result.get("explanation"),
+            }
+
+    return {"ir_entries": [out]}
 
 
 def _infer_layout_overrides(instruction: str) -> Dict[str, Any]:

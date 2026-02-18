@@ -22,10 +22,11 @@ from src.db_models import (
 from src.models.architecture_plan import ArchitecturePlan as ArchitecturePlanModel
 from src.agents.conversation_planner_agent import ConversationPlannerAgent, LATEST_IMAGE_PLACEHOLDER
 from src.mcp.registry import mcp_registry
-from src.mcp.tools import register_mcp_tools
+from src.mcp.tools import register_mcp_tools, apply_ir_node_styles_to_svg
 from src.orchestrator.adk_workflow import ADKWorkflow
 from src.services.intent import explain_architecture
 from src.services.styling_audit_service import record_styling_audit
+from src.services.agent_trace_service import record_trace, trace_agent
 from src.tools.file_storage import save_json
 from src.tools.text_extractor import extract_text
 from src.tools.svg_ir import generate_svg_from_plan, render_ir_svg, build_ir_from_plan, ZONE_TITLES
@@ -584,28 +585,13 @@ def _prepare_tool_arguments(
     if tool_name in {
         "generate_plantuml",
         "generate_diagram",
-        "generate_multiple_diagrams",
         "edit_diagram_via_semantic_understanding",
     }:
         args.setdefault("output_name", f"{session.id}_{_next_version(db, session.id)}")
 
-    if tool_name == "generate_multiple_diagrams":
-        if "diagram_types" not in args and planned_types:
-            if isinstance(diagram_count, int) and diagram_count > 0:
-                args["diagram_types"] = planned_types[:diagram_count]
-            else:
-                args["diagram_types"] = planned_types
-        if "diagram_types" not in args and isinstance(diagram_count, int) and diagram_count > 0:
-            latest_plan = get_latest_plan(db, session.id)
-            if latest_plan and isinstance(latest_plan.data, dict):
-                types = latest_plan.data.get("diagram_views") or []
-                if types:
-                    args["diagram_types"] = list(types)[:diagram_count]
-
     if tool_name in {
         "generate_plantuml",
         "generate_diagram",
-        "generate_multiple_diagrams",
         "edit_diagram_via_semantic_understanding",
         "render_image_from_plan",
         "explain_architecture",
@@ -642,7 +628,19 @@ def _prepare_tool_arguments(
             return args, "I need an image to edit. Generate a diagram first."
 
     if tool_name in {"render_image_from_plan", "edit_existing_image", "edit_diagram_ir"}:
-        args.setdefault("session_id", str(session.id))
+        # Always force-set session_id; planner may supply placeholder strings
+        args["session_id"] = str(session.id)
+
+    if tool_name == "edit_diagram_ir":
+        # Inject the latest IR id when the planner-supplied ir_id is missing or
+        # looks like a placeholder that won't resolve in the DB.
+        supplied_ir_id = args.get("ir_id")
+        if not supplied_ir_id or supplied_ir_id == "session_id_placeholder":
+            ir_versions = list_ir_versions(db, session.id)
+            if ir_versions:
+                args["ir_id"] = str(ir_versions[-1].id)
+            else:
+                args.pop("ir_id", None)
 
     return args, None
 
@@ -803,7 +801,9 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
         },
     )
 
+    planner_start = time.perf_counter()
     plan_result = planner.plan(message, state, mcp_registry.list_tools())
+    planner_ms = int((time.perf_counter() - planner_start) * 1000)
     intent = plan_result.get("intent", "clarify")
     plan_id_value = plan_result.get("plan_id") or str(uuid4())
     plan_uuid = _parse_uuid(plan_id_value)
@@ -816,6 +816,33 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
             "intent": intent,
             "step_count": len(plan_result.get("plan", []) or []),
         },
+    )
+
+    # ── Trace: planner decision ──
+    planner_meta = plan_result.get("metadata") if isinstance(plan_result.get("metadata"), dict) else {}
+    record_trace(
+        db,
+        session_id=session.id,
+        agent_name="conversation_planner",
+        input_summary={
+            "user_message": message,
+            "has_plan": bool(context_cache.get("latest_plan")),
+            "image_count": len(context_cache.get("images", []) or []),
+            "active_image_id": state.get("active_image_id"),
+        },
+        output_summary={
+            "intent": intent,
+            "steps": [
+                {"tool": s.get("tool"), "diagram_type": s.get("diagram_type")}
+                for s in (plan_result.get("plan") or [])
+            ],
+            "source": planner_meta.get("source"),
+            "model": planner_meta.get("model"),
+        },
+        decision=f"intent={intent}, steps={len(plan_result.get('plan') or [])}",
+        reasoning=planner_meta.get("raw_response") if isinstance(planner_meta, dict) else None,
+        plan_id=plan_uuid,
+        duration_ms=planner_ms,
     )
 
     metadata_payload = plan_result.get("metadata") if isinstance(plan_result.get("metadata"), dict) else {}
@@ -873,16 +900,42 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
                     plan_data=latest_plan_data,
                 )
             except DiagramValidationError as exc:
+                duration_ms = int((time.perf_counter() - start) * 1000)
                 blocked = ", ".join(exc.result.blocked_tokens) if getattr(exc, "result", None) else ""
                 response_text = f"Rejected diagram from planner: {exc}. {blocked}".strip()
+                record_trace(
+                    db,
+                    session_id=session.id,
+                    agent_name="llm.diagram",
+                    input_summary={"rendering_service": rendering_service},
+                    output_summary=None,
+                    decision="validation_rejected",
+                    plan_id=plan_record.id,
+                    step_index=step_index,
+                    duration_ms=duration_ms,
+                    error=response_text,
+                )
                 error_occurred = True
                 break
             except Exception as exc:
+                duration_ms = int((time.perf_counter() - start) * 1000)
                 logger.exception(
                     "Failed to render LLM diagram",
                     extra={"session_id": str(session.id), "plan_id": str(plan_record.id)},
                 )
                 response_text = f"Unable to render provided diagram: {exc}"
+                record_trace(
+                    db,
+                    session_id=session.id,
+                    agent_name="llm.diagram",
+                    input_summary={"rendering_service": rendering_service},
+                    output_summary=None,
+                    decision="error",
+                    plan_id=plan_record.id,
+                    step_index=step_index,
+                    duration_ms=duration_ms,
+                    error=str(exc),
+                )
                 error_occurred = True
                 break
 
@@ -922,6 +975,27 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
                 "audit_id": llm_result["audit_id"],
                 "execution_id": str(exec_record.id),
             })
+
+            # ── Trace: LLM diagram step ──
+            record_trace(
+                db,
+                session_id=session.id,
+                agent_name="llm.diagram",
+                input_summary={
+                    "format": llm_result["format"],
+                    "diagram_type": llm_result["diagram_type"],
+                    "rendering_service": rendering_service or f"llm_{llm_result['format']}",
+                    "user_prompt_len": len(message) if message else 0,
+                },
+                output_summary={
+                    "image_id": str(llm_result["image"].id),
+                    "audit_id": llm_result["audit_id"],
+                },
+                decision=f"rendered {llm_result['format']} {llm_result['diagram_type']}",
+                plan_id=plan_record.id,
+                step_index=step_index,
+                duration_ms=duration_ms,
+            )
             generated_image_ids.append(llm_result["image"].id)
             continue
         if not tool_name:
@@ -996,6 +1070,18 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
                     None,
                     duration_ms,
                 )
+                record_trace(
+                    db,
+                    session_id=session.id,
+                    agent_name=f"tool.{tool_name}",
+                    input_summary={k: v for k, v in call_args.items() if k not in ("architecture_plan",)},
+                    output_summary=None,
+                    decision="error",
+                    plan_id=plan_record.id,
+                    step_index=step_index,
+                    duration_ms=duration_ms,
+                    error=str(exc),
+                )
                 response_text = f"Tool '{tool_name}' failed: {exc}"
                 error_occurred = True
                 break
@@ -1014,6 +1100,34 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
             _record_plan_execution(db, plan_record, step_index, tool_name, call_args, tool_output, audit_id, duration_ms)
             tool_results.append({"tool": tool_name, "output": tool_output})
 
+            # ── Trace: tool execution ──
+            _tool_out_summary = {}
+            for _tk, _tv in (tool_output or {}).items():
+                if _tk in ("svg", "svg_text", "plantuml_text", "architecture_plan"):
+                    _tool_out_summary[_tk] = f"<{len(str(_tv))} chars>" if _tv else None
+                elif _tk == "ir_entries":
+                    _tool_out_summary[_tk] = [
+                        {ek: (f"<{len(str(ev))} chars>" if ek in ("svg",) and ev else ev)
+                         for ek, ev in (e or {}).items()}
+                        for e in (_tv or [])
+                    ]
+                else:
+                    _tool_out_summary[_tk] = _tv
+            _tool_in_summary = {k: v for k, v in call_args.items() if k not in ("architecture_plan",)}
+            if "architecture_plan" in call_args:
+                _tool_in_summary["architecture_plan"] = "<present>"
+            record_trace(
+                db,
+                session_id=session.id,
+                agent_name=f"tool.{tool_name}",
+                input_summary=_tool_in_summary,
+                output_summary=_tool_out_summary,
+                decision=f"completed in {duration_ms}ms",
+                plan_id=plan_record.id,
+                step_index=step_index,
+                duration_ms=duration_ms,
+            )
+
             if tool_name == "generate_architecture_plan":
                 plan_data = tool_output.get("architecture_plan")
                 if plan_data:
@@ -1027,13 +1141,142 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
             elif tool_name in {
                 "generate_plantuml",
                 "generate_diagram",
-                "generate_multiple_diagrams",
+                "generate_multiple_diagrams",  # kept for backwards compat if still referenced
                 "edit_diagram_via_semantic_understanding",
                 "edit_diagram_ir",
                 "generate_sequence_from_architecture",
                 "generate_plantuml_sequence",
             }:
                 for entry in tool_output.get("ir_entries", []) or []:
+                    # Allow styling transform entries that contain patch_ops or updated_ir
+                    if entry.get("patch_ops") or entry.get("updated_ir"):
+                        # Main Agent deterministic application of styling patches/updates
+                        parent_ir_id = entry.get("parent_ir_id")
+                        diagram_type = entry.get("diagram_type") or "diagram"
+                        # Resolve parent IR
+                        parent_ir = None
+                        if parent_ir_id:
+                            try:
+                                parent_ir = db.get(DiagramIR, _parse_uuid(parent_ir_id))
+                            except Exception:
+                                parent_ir = None
+                        if not parent_ir:
+                            # fallback to latest
+                            parent_ir = db.execute(
+                                select(DiagramIR).where(DiagramIR.session_id == session.id).order_by(DiagramIR.version.desc())
+                            ).scalars().first()
+
+                        parent_ir_json = dict(parent_ir.ir_json) if parent_ir and parent_ir.ir_json else {}
+
+                        # Apply patch_ops deterministically if provided
+                        updated_ir_json = None
+                        if entry.get("patch_ops"):
+                            try:
+                                updated_ir_json = _apply_patch_ops_to_ir(parent_ir_json, entry.get("patch_ops"))
+                            except Exception as exc:
+                                logger.exception("Patch application failed", extra={"session_id": str(session.id), "error": str(exc)})
+                                # Record audit via styling_audit and continue safely
+                                record_styling_audit(
+                                    db,
+                                    session_id=session.id,
+                                    plan_id=plan_id_value,
+                                    diagram_id=None,
+                                    diagram_type=diagram_type,
+                                    user_prompt=None,
+                                    llm_format=None,
+                                    llm_diagram=None,
+                                    extracted_intent=None,
+                                    styling_plan=None,
+                                    execution_steps=["patch_apply_failed"],
+                                    agent_reasoning=str(exc),
+                                    mode="patch_apply_failed",
+                                    renderer_input_before=None,
+                                    renderer_input_after=None,
+                                    svg_before=None,
+                                    svg_after=None,
+                                )
+                                continue
+                        elif entry.get("updated_ir"):
+                            updated_ir_json = entry.get("updated_ir")
+
+                        if updated_ir_json is None:
+                            continue
+
+                        # Create new IR version with updated_ir_json, reuse svg if provided or parent svg
+                        svg_text = entry.get("svg") or (parent_ir.svg_text if parent_ir else "")
+
+                        # ── Apply per-node style changes from the patched IR ──
+                        # The IR carries node_style (fillColor, borderColor, etc.)
+                        # per node.  We must project those onto the SVG elements
+                        # so the visual output actually reflects the edit.
+                        if isinstance(updated_ir_json, dict):
+                            svg_text = apply_ir_node_styles_to_svg(svg_text, updated_ir_json)
+
+                        # Ensure metadata embedding — use the full patched IR so
+                        # the SVG metadata stays in sync with the authoritative IR.
+                        metadata_for_svg = updated_ir_json if isinstance(updated_ir_json, dict) else {}
+                        svg_text = _ensure_ir_metadata(svg_text, metadata_for_svg)
+
+                        ir_version = _create_ir_version(
+                            db,
+                            session,
+                            diagram_type=diagram_type,
+                            svg_text=svg_text,
+                            reason=entry.get("reason") or "styling_patch",
+                            parent_ir_id=parent_ir.id if parent_ir else None,
+                            ir_json=updated_ir_json,
+                        )
+
+                        svg_file = render_ir_svg(svg_text, f"{session.id}_{diagram_type}_{ir_version.version}")
+                        created_image = _create_image(
+                            db,
+                            session,
+                            file_path=svg_file,
+                            prompt=None,
+                            reason=f"diagram: {diagram_type}",
+                            ir_id=ir_version.id,
+                        )
+                        assistant_messages.append(
+                            Message(
+                                session_id=session.id,
+                                role="assistant",
+                                content="",
+                                intent=intent,
+                                image_id=created_image.id,
+                                message_type="image",
+                                image_version=created_image.version,
+                                diagram_type=diagram_type,
+                                ir_id=ir_version.id,
+                            )
+                        )
+                        last_image_id = created_image.id
+                        generated_image_ids.append(created_image.id)
+
+                        # ── Trace: patch / IR update application ──
+                        _patch_input = {
+                            "parent_ir_id": str(parent_ir_id) if parent_ir_id else None,
+                            "diagram_type": diagram_type,
+                            "has_patch_ops": bool(entry.get("patch_ops")),
+                            "has_updated_ir": bool(entry.get("updated_ir")),
+                        }
+                        if entry.get("patch_ops"):
+                            _patch_input["patch_ops_count"] = len(entry["patch_ops"])
+                        record_trace(
+                            db,
+                            session_id=session.id,
+                            agent_name="patch.apply_ir",
+                            input_summary=_patch_input,
+                            output_summary={
+                                "image_id": str(created_image.id),
+                                "ir_version_id": str(ir_version.id),
+                                "ir_version": ir_version.version,
+                            },
+                            decision=f"applied {'patch_ops' if entry.get('patch_ops') else 'updated_ir'} → {diagram_type}",
+                            plan_id=plan_record.id,
+                            step_index=step_index,
+                        )
+                        continue
+
                     diagram_type = entry.get("diagram_type") or "diagram"
                     svg_text = entry.get("svg")
                     svg_file = entry.get("svg_file")
@@ -1369,6 +1612,139 @@ def _create_ir_version(
     db.add(ir_version)
     db.flush()
     return ir_version
+
+
+def _apply_patch_ops_to_ir(ir_json: dict, patch_ops: list[dict]) -> dict:
+    import copy
+
+    if not isinstance(ir_json, dict):
+        raise ValueError("ir_json must be a dict to apply patches")
+    working = copy.deepcopy(ir_json)
+
+    allowed_prefixes = ("/nodes/", "/edges/", "/zone_order", "/globalIntent")
+
+    def _find_node_by_id_or_label(nodes: list, node_id_or_label: str):
+        for n in nodes:
+            if str(n.get("node_id") or n.get("id") or "").lower() == node_id_or_label.lower():
+                return n
+            if str(n.get("label") or "").lower() == node_id_or_label.lower():
+                return n
+        return None
+
+    nodes = working.setdefault("nodes", [])
+    edges = working.setdefault("edges", [])
+
+    # Navigate into enriched_ir when nodes/edges are nested (real DB IR structure)
+    _inner = working.get("enriched_ir") if isinstance(working.get("enriched_ir"), dict) else None
+    if _inner is not None:
+        if not working.get("nodes") and _inner.get("nodes"):
+            nodes = _inner["nodes"]
+        if not working.get("edges") and _inner.get("edges"):
+            edges = _inner["edges"]
+
+    for op in patch_ops:
+        if not isinstance(op, dict):
+            raise ValueError("Invalid patch op format")
+        path = op.get("path")
+        if not path or not any(path.startswith(p) for p in allowed_prefixes):
+            raise ValueError(f"Patch path not allowed: {path}")
+        verb = op.get("op")
+        value = op.get("value")
+
+        # nodes path
+        if path.startswith("/nodes/"):
+            parts = path.split("/")
+            # ['', 'nodes', '<node_id>', ...]
+            if len(parts) < 4:
+                raise ValueError(f"Invalid node patch path: {path}")
+            node_key = parts[2]
+            subpath = parts[3:]
+            node = _find_node_by_id_or_label(nodes, node_key)
+            if node is None:
+                raise ValueError(f"Node not found for patch: {node_key}")
+            # apply replace for known subpaths
+            if len(subpath) == 1:
+                field = subpath[0]
+                if verb == "replace":
+                    node[field] = value
+                else:
+                    raise ValueError(f"Unsupported op {verb} for node field")
+            elif len(subpath) >= 2:
+                # support node_style subfields
+                if subpath[0] == "node_style":
+                    style = node.setdefault("node_style", {})
+                    field = subpath[1]
+                    if verb == "replace":
+                        style[field] = value
+                    else:
+                        raise ValueError(f"Unsupported op {verb} for node_style")
+                else:
+                    raise ValueError(f"Unsupported node subpath: {'/'.join(subpath)}")
+
+        elif path.startswith("/edges/"):
+            parts = path.split("/")
+            if len(parts) < 4:
+                raise ValueError(f"Invalid edge patch path: {path}")
+            edge_key = parts[2]
+            subpath = parts[3:]
+            # find edge by edge_id
+            target_edge = None
+            for e in edges:
+                if str(e.get("edge_id") or "").lower() == edge_key.lower():
+                    target_edge = e
+                    break
+            if not target_edge:
+                raise ValueError(f"Edge not found for patch: {edge_key}")
+            if len(subpath) == 1:
+                field = subpath[0]
+                if verb == "replace":
+                    target_edge[field] = value
+                else:
+                    raise ValueError(f"Unsupported op {verb} for edge field")
+            else:
+                raise ValueError("Unsupported edge subpath")
+        elif path.startswith("/zone_order"):
+            if verb == "replace":
+                # Write zone_order into enriched_ir when the wrapper structure is present
+                if _inner is not None:
+                    _inner["zone_order"] = value
+                else:
+                    working["zone_order"] = value
+            else:
+                raise ValueError(f"Unsupported op {verb} for zone_order")
+        elif path.startswith("/globalIntent"):
+            parts = path.split("/")
+            if len(parts) < 2:
+                raise ValueError(f"Invalid globalIntent path: {path}")
+            field_parts = parts[2:]
+            gi = working.setdefault("globalIntent", {})
+            if len(field_parts) == 1 and verb == "replace":
+                gi[field_parts[0]] = value
+            elif len(field_parts) >= 2 and verb == "replace":
+                # nested fields
+                cur = gi
+                for p in field_parts[:-1]:
+                    cur = cur.setdefault(p, {})
+                cur[field_parts[-1]] = value
+            else:
+                raise ValueError(f"Unsupported op {verb} for globalIntent")
+        else:
+            raise ValueError(f"Unsupported patch path: {path}")
+
+    # Structural validation
+    node_ids = {str(n.get("node_id") or n.get("id") or "") for n in nodes if n.get("node_id") or n.get("id")}
+    if len(node_ids) != len([n for n in nodes if n.get("node_id") or n.get("id")]):
+        raise ValueError("Duplicate node ids introduced")
+
+    for e in edges:
+        from_id = e.get("from_id") or e.get("from") or e.get("source")
+        to_id = e.get("to_id") or e.get("to") or e.get("target")
+        if from_id and str(from_id) not in node_ids:
+            raise ValueError(f"Orphan edge source: {from_id}")
+        if to_id and str(to_id) not in node_ids:
+            raise ValueError(f"Orphan edge target: {to_id}")
+
+    return working
 
 
 def _parse_uuid(value: str) -> UUID:

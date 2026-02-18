@@ -105,15 +105,15 @@ class StylingPlanner:
 
 
 class GenerateAndStylePlanner:
+    """Planner that generates a single diagram then applies styling."""
     def plan(self, message, state, tools):
         plan_id = str(uuid4())
         return {
             "plan_id": plan_id,
             "intent": "regenerate",
-            "diagram_count": 2,
+            "diagram_count": 1,
             "diagrams": [
                 {"type": "system_context", "reason": "generate"},
-                {"type": "component", "reason": "generate"},
             ],
             "target_image_id": None,
             "target_diagram_type": "system_context",
@@ -121,8 +121,8 @@ class GenerateAndStylePlanner:
             "requires_regeneration": True,
             "plan": [
                 {
-                    "tool": "generate_multiple_diagrams",
-                    "arguments": {"diagram_types": ["system_context", "component"]},
+                    "tool": "generate_diagram",
+                    "arguments": {"diagram_type": "system_context"},
                 },
                 {
                     "tool": "styling.apply_post_svg",
@@ -217,6 +217,7 @@ def test_styling_message_generates_new_image(monkeypatch):
 
 
 def test_generate_multiple_diagrams_are_all_styled(monkeypatch, tmp_path):
+    """After single-diagram output change, we generate one diagram + style it."""
     engine = create_engine("sqlite+pysqlite:///:memory:")
     SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     Base.metadata.create_all(bind=engine)
@@ -225,7 +226,7 @@ def test_generate_multiple_diagrams_are_all_styled(monkeypatch, tmp_path):
     monkeypatch.setattr(session_service, "ConversationPlannerAgent", GenerateAndStylePlanner)
 
     def fake_generate(plan, overrides=None, diagram_types=None):
-        types = diagram_types or ["system_context", "component"]
+        types = diagram_types or ["system_context"]
         return [
             {"type": dtype, "plantuml": f"@startuml\ncomponent {dtype}\n@enduml"}
             for dtype in types
@@ -259,9 +260,9 @@ def test_generate_multiple_diagrams_are_all_styled(monkeypatch, tmp_path):
 
         ir_versions = session_service.list_ir_versions(db, session.id)
         styled_versions = [ir for ir in ir_versions if ir.reason == "styling"]
-        assert len(styled_versions) >= 2
+        # Single diagram output: expect exactly 1 styled version
+        assert len(styled_versions) >= 1
         styled_types = {ir.diagram_type for ir in styled_versions}
-        assert "component" in styled_types
         assert any(kind in styled_types for kind in {"system_context", "context"})
         for ir in styled_versions:
             assert "#F8F9FA" in ir.svg_text, f"Expected white text fill for {ir.diagram_type}"

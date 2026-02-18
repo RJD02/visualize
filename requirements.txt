@@ -18,3 +18,5 @@ google-adk==1.23.0
 pypdf==4.2.0
 sqlalchemy==2.0.32
 psycopg==3.2.3
+
+networkx==3.1

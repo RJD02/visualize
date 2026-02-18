@@ -32,6 +32,7 @@ _ALLOWED_SKINPARAM_KEYS = {
 _ALLOWED_SKINPARAM_KEYS_LOWER = {key.lower() for key in _ALLOWED_SKINPARAM_KEYS}
 
 _MERMAID_BLOCK_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"%%\s*\{\s*init", re.IGNORECASE), "init"),
     (re.compile(r"<\s*script", re.IGNORECASE), "<script>"),
     (re.compile(r"<\s*iframe", re.IGNORECASE), "<iframe>"),
     (re.compile(r"<\s*img", re.IGNORECASE), "<img>"),
