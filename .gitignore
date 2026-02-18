@@ -16,3 +16,7 @@ node_modules/
 ui/node_modules/
 ui/dist/
 .DS_Store
+
+# ignore potential jira deletion scripts that may contain tokens
+scripts/jira_delete.go
+specs/jira_deletion.py
