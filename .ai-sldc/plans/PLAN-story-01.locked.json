@@ -1,0 +1,24 @@
+{
+  "plan_id": "PLAN-story-01",
+  "kind": "feature",
+  "entity_id": "story-01",
+  "allowed_scope": [
+    "src/renderer.py",
+    "scripts/reproduce_icon_artifact.py",
+    ".ai-sldc/stories/story-01/intent.md",
+    ".ai-sldc/stories/story-01/acceptance.md",
+    ".ai-sldc/plans/PLAN-story-01.draft.md"
+  ],
+  "tasks": [
+    "Add deterministic reproduction script in scripts/",
+    "Enforce deterministic renderer config in src/renderer.py",
+    "Add unit test for deterministic renderer output",
+    "Add integration verification comparing output to golden baseline"
+  ],
+  "constraints": [
+    "Only modify files listed in allowed_scope",
+    "No unrelated refactors outside renderer scope"
+  ],
+  "acceptance_summary": "Reproduction harness created; renderer outputs deterministic assets and metadata preserved; unit and integration tests added.",
+  "draft_checksum": "9f4edb6deb2008e002b3f3f4cc79a4822ea0b6f540b43d8c2305f39e2a0b65b6"
+}

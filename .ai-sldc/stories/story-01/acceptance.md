@@ -1,3 +1,18 @@
+# Story 01 Acceptance Criteria
+
+Acceptance checklist:
+
+ - The intermittent icon rendering artifact can be reproduced reliably in a local, deterministic harness.
+ - A minimal code/configuration change is proposed and implemented only within the renderer/export scope.
+ - Unit tests and a small integration test (headless) demonstrate the artifact is resolved and prevent regressions.
+ - No changes are made outside of the allowed scope (no unrelated refactors in `src/` beyond the renderer files).
+ - Tests pass locally (unit) and headless Cypress (if applicable) in CI config.
+
+Verification steps:
+
+ 1. Run included reproduction script to reproduce artifact.
+ 2. Run unit tests; they must pass.
+ 3. Run integrated export verification; output assets must match the golden baseline.
 # Acceptance Criteria – STORY-ICON-001
 
 ## Functional Criteria

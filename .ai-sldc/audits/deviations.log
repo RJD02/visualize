@@ -1,3 +1,8 @@
+# deviations.log
+
+# No deviations recorded at planning time.
+
+2026-02-19T12:10:00Z | type: TEST_STRATEGY_ADJUSTMENT | id: story-01 | reason: Full unit suite collection failed due to unrelated test expectations that require output artifacts; action: ran targeted renderer tests to validate change; outcome: targeted_tests_passed
 Original Plan Item: Run Cypress headless in testing phase using existing project config.
 
 Why it failed: The environment did not have Cypress installed and project lacked a Cypress v10+ config (cypress.config.js) and support file. Initial run failed with "Could not find a Cypress configuration file".
