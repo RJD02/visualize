@@ -4,6 +4,11 @@
 {"timestamp": "2026-02-19T11:12:00Z", "type": "PLAN_CHANGE", "id": "story-02", "description": "Patched backend-python/src/ir_v2.py to initialize 'edges' in upgrade_to_v2 (schema-required) to fix test IR validation failure.", "changes": ["backend-python/src/ir_v2.py"]}
 {"timestamp": "2026-02-19T11:14:00Z", "type": "PLAN_CHANGE", "id": "story-02", "description": "Added normalization in `validate_ir` to convert legacy 'relations' into schema 'edges' for backward compatibility.", "changes": ["backend-python/src/ir_v2.py"]}
 {"timestamp": "2026-02-19T11:18:00Z", "type": "PLAN_CHANGE", "id": "story-02", "description": "Updated `src/ir/relationship_extractor.py` to handle verb-first prompts (e.g., 'Connect A to B') by adding a fallback extraction heuristic.", "changes": ["src/ir/relationship_extractor.py"]}
+# deviations.log
+
+# No deviations recorded at planning time.
+
+2026-02-19T12:10:00Z | type: TEST_STRATEGY_ADJUSTMENT | id: story-01 | reason: Full unit suite collection failed due to unrelated test expectations that require output artifacts; action: ran targeted renderer tests to validate change; outcome: targeted_tests_passed
 Original Plan Item: Run Cypress headless in testing phase using existing project config.
 
 Why it failed: The environment did not have Cypress installed and project lacked a Cypress v10+ config (cypress.config.js) and support file. Initial run failed with "Could not find a Cypress configuration file".

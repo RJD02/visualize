@@ -1,3 +1,13 @@
+# Story 01 — Improve icon rendering stability
+
+Intent:
+
+Stabilize and improve the icon-renderer used by the `icons` worktree so that exported SVG/PNG assets are consistent across runs and do not drop metadata. This is a small feature scoped to the renderer module and associated export pipeline.
+
+Goals:
+- Reproduce current intermittent rendering artifact locally.
+- Propose minimal, deterministic fix scoped to renderer configuration or asset export logic.
+- Provide acceptance criteria and tests that guard regression.
 # STORY-ICON-001
 ## Title
 Embed Service Icons in Diagram Agent Output
