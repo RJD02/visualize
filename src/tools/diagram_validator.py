@@ -93,9 +93,65 @@ def _validate_skinparams(text: str) -> List[str]:
     return blocked
 
 
+# Per-shape regexes for simple Mermaid node labels.
+# Compound shapes ([(, ([, ((, {{, [[, etc.) are excluded via negative lookahead
+# so we only match plain [label], {label}, and (label) delimiters.
+_RECT_LABEL_RE = re.compile(
+    r'(?P<id>[A-Za-z_][A-Za-z0-9_]*)'
+    r'\[(?![(\[/{\\>])'        # [ not followed by compound-shape chars
+    r'(?P<label>[^\]]+?)'      # non-greedy up to first ]
+    r'\]'
+)
+_DIAMOND_LABEL_RE = re.compile(
+    r'(?P<id>[A-Za-z_][A-Za-z0-9_]*)'
+    r'\{(?!\{)'                # { not followed by {{ (hexagon)
+    r'(?P<label>[^\}]+?)'
+    r'\}'
+)
+_ROUNDED_LABEL_RE = re.compile(
+    r'(?P<id>[A-Za-z_][A-Za-z0-9_]*)'
+    r'\((?![\[(])'             # ( not followed by ([ or ((
+    r'(?P<label>[^\)]+?)'
+    r'\)'
+)
+
+# Characters that Mermaid would misinterpret as shape-syntax inside labels.
+_MERMAID_SPECIAL_CHARS = re.compile(r'[(){}]')
+
+
+def _quote_label_if_needed(m: re.Match, open_br: str, close_br: str) -> str:
+    """If the matched label contains special chars, wrap it in double-quotes."""
+    label = m.group('label')
+    # Already quoted – leave as-is
+    if label.startswith('"') and label.endswith('"'):
+        return m.group(0)
+    if _MERMAID_SPECIAL_CHARS.search(label):
+        safe = label.replace('"', '#quot;')
+        return f'{m.group("id")}{open_br}"{safe}"{close_br}'
+    return m.group(0)
+
+
+def _quote_mermaid_node_labels(line: str) -> str:
+    """Wrap node labels that contain special characters in double-quotes.
+
+    Mermaid treats ``(``, ``)``, ``{`` and ``}`` inside node labels as shape
+    delimiters.  Wrapping the label text in ``"…"`` forces Mermaid to treat
+    them as literal characters.
+    """
+    line = _RECT_LABEL_RE.sub(lambda m: _quote_label_if_needed(m, '[', ']'), line)
+    line = _DIAMOND_LABEL_RE.sub(lambda m: _quote_label_if_needed(m, '{', '}'), line)
+    line = _ROUNDED_LABEL_RE.sub(lambda m: _quote_label_if_needed(m, '(', ')'), line)
+    return line
+
+
 def _sanitize_mermaid(text: str) -> str:
     text = text.replace("\r", "")
-    return text.strip()
+    # Remove bare "title ..." lines which are invalid inside Mermaid graph/flowchart blocks
+    lines = text.split("\n")
+    cleaned = [line for line in lines if not re.match(r"^\s*title\s+", line, re.IGNORECASE)]
+    # Quote node labels that contain special characters like () {}
+    cleaned = [_quote_mermaid_node_labels(line) for line in cleaned]
+    return "\n".join(cleaned).strip()
 
 
 def _sanitize_plantuml(text: str, warnings: List[str]) -> str:

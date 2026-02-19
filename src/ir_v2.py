@@ -1,11 +1,45 @@
+
 """Canonical IR v2 schema and helpers."""
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from jsonschema import Draft202012Validator, ValidationError
+
+
+# Edge dataclass for new IR schema
+@dataclass(frozen=True)
+class Edge:
+    edge_id: str
+    from_: str
+    to: str
+    relation_type: str
+    direction: str
+    category: str
+    mode: str
+    label: str
+    confidence: float
+
+    def to_dict(self) -> dict:
+        return {
+            "edge_id": self.edge_id,
+            "from": self.from_,
+            "to": self.to,
+            "relation_type": self.relation_type,
+            "direction": self.direction,
+            "category": self.category,
+            "mode": self.mode,
+            "label": self.label,
+            "confidence": self.confidence,
+        }
+
+
+def make_edge_id() -> str:
+    return f"edge-{uuid.uuid4().hex[:8]}"
+
 
 IR_SCHEMA: Dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -21,7 +55,7 @@ IR_SCHEMA: Dict[str, Any] = {
             "properties": {
                 "diagram": {
                     "type": "object",
-                    "required": ["id", "type", "blocks", "relations"],
+                    "required": ["id", "type", "blocks", "edges"],
                     "properties": {
                         "id": {"type": "string"},
                         "type": {"type": "string"},
@@ -54,16 +88,21 @@ IR_SCHEMA: Dict[str, Any] = {
                                 "additionalProperties": True
                             }
                         },
-                        "relations": {
+                        "edges": {
                             "type": "array",
                             "items": {
                                 "type": "object",
-                                "required": ["from", "to"],
+                                "required": ["edge_id", "from", "to", "relation_type", "direction", "category", "mode", "label", "confidence"],
                                 "properties": {
+                                    "edge_id": {"type": "string"},
                                     "from": {"type": "string"},
                                     "to": {"type": "string"},
+                                    "relation_type": {"type": "string"},
+                                    "direction": {"type": "string", "enum": ["unidirectional", "bidirectional"]},
+                                    "category": {"type": "string", "enum": ["data_flow", "user_traffic", "replication", "auth", "secret_distribution", "monitoring", "control", "metadata", "network"]},
+                                    "mode": {"type": "string", "enum": ["sync", "async", "broadcast", "conditional"]},
                                     "label": {"type": "string"},
-                                    "type": {"type": "string"}
+                                    "confidence": {"type": "number", "minimum": 0, "maximum": 1}
                                 },
                                 "additionalProperties": True
                             }

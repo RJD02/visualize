@@ -1,0 +1,33 @@
+{
+  "plan_id": "PLAN-BUG-ICON-01",
+  "kind": "debug",
+  "bug_id": "BUG-ICON-01",
+  "approved_timestamp": "2026-02-19T11:05:00Z",
+  "tasks": [
+    {"id": 1, "title": "Canonicalize symbol ids", "description": "Ensure unknown services map only to `icon-service-generic` to avoid id collisions."},
+    {"id": 2, "title": "Inject compatibility attributes", "description": "Add both `href` and `xlink:href` on injected <use> elements for broader compatibility."},
+    {"id": 3, "title": "Strengthen idempotence checks", "description": "Detect existing injection by checking markers and existing <use> children to prevent duplicates."},
+    {"id": 4, "title": "Sanitizer adjustments", "description": "Preserve necessary attributes like `viewBox` while stripping unsafe attributes."},
+    {"id": 5, "title": "Unit tests", "description": "Add regression unit tests for duplicate injection, fallback canonicalization, and href attribute presence."},
+    {"id": 6, "title": "Cypress repro test", "description": "Add Cypress reproduction/spec to assert no duplicates and correct fallback in fixtures."}
+  ],
+  "allowed_file_scope": [
+    "src/diagram/icon_injector.py",
+    "tests/unit/test_icon_injector.py",
+    "cypress/integration/icon_injection.spec.js",
+    "cypress/fixtures/**"
+  ],
+  "constraints": {
+    "kind": "debug",
+    "offline_only": true,
+    "no_external_cdn": true,
+    "preserve_svg_validity": true
+  },
+  "acceptance_summary": {
+    "duplicate_injection": "Injector must not add duplicate <use> elements when called multiple times",
+    "fallback": "Unknown tokens must map to a single `icon-service-generic` symbol",
+    "compatibility": "Injected <use> elements include both `href` and `xlink:href` attributes",
+    "sanitization": "Sanitizer preserves viewBox and strips unsafe attributes"
+  },
+  "draft_checksum_sha256": "cda07dac0b669694d07c90a3be9fe2ac080f947ce14ad60042216663d268888e"
+}

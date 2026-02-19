@@ -1,3 +1,12 @@
+/**
+ * inline-diagram-rerender.cy.ts
+ *
+ * Updated for specs_v42: single-column chat UI.
+ * Diagrams now render inline inside the chat message list,
+ * not inside a separate "diagram-history-panel".
+ * Intercepting /api/chat instead of /api/sessions/{id}/messages.
+ */
+
 const SESSION_ID = 'cypress-session-stable';
 const IMAGE_ID = 'cypress-image-001';
 
@@ -9,43 +18,30 @@ const SAMPLE_SVG = `<?xml version="1.0" encoding="UTF-8"?>
     <text x="150" y="50" font-size="10" fill="#fff" text-anchor="middle">DB</text>
 </svg>`;
 
-const buildSessionPayload = () => {
-    const now = new Date().toISOString();
-    return {
-        session_id: SESSION_ID,
-        messages: [
-            {
-                id: 'msg-user-1',
-                role: 'user',
-                content: 'Generate a component diagram',
-                created_at: now,
-            },
-            {
-                id: 'msg-assistant-1',
-                role: 'assistant',
-                content: 'Here is the latest diagram',
-                created_at: now,
-                message_type: 'image',
+const buildChatEnvelope = () => ({
+    response_type: 'diagram',
+    blocks: [
+        {
+            block_type: 'text',
+            payload: { markdown: 'Here is the latest diagram' },
+        },
+        {
+            block_type: 'diagram',
+            payload: {
                 image_id: IMAGE_ID,
-                image_version: 1,
                 diagram_type: 'component',
+                ir_version: 1,
             },
-        ],
-        images: [
-            {
-                id: IMAGE_ID,
-                version: 1,
-                file_path: `/outputs/${IMAGE_ID}_component_1.svg`,
-                created_at: now,
-                diagram_type: 'component',
-            },
-        ],
-        diagrams: [],
-        plans: [],
-        source_repo: null,
-        source_commit: null,
-    };
-};
+        },
+    ],
+    state: {
+        ir_version: 1,
+        has_diagram: true,
+        analysis_score: null,
+    },
+    confidence: 1.0,
+    session_id: SESSION_ID,
+});
 
 declare global {
     interface Window {
@@ -56,10 +52,9 @@ declare global {
 describe('Inline diagram render stability', () => {
     it('does not re-render inline diagrams when typing into the chat input', () => {
         cy.intercept('POST', '/api/sessions', { session_id: SESSION_ID }).as('createSession');
-        cy.intercept('POST', `/api/sessions/${SESSION_ID}/messages`, { id: 'msg-new' }).as('sendMessage');
-        cy.intercept('GET', `/api/sessions/${SESSION_ID}`, (req) => {
-            req.reply(buildSessionPayload());
-        }).as('fetchSession');
+        cy.intercept('POST', '/api/chat', (req) => {
+            req.reply(buildChatEnvelope());
+        }).as('sendChat');
         cy.intercept('GET', '/api/diagram/render*', { svg: SAMPLE_SVG }).as('renderSvg');
 
         cy.visit('/');
@@ -67,12 +62,13 @@ describe('Inline diagram render stability', () => {
         cy.get('[data-cy="chat-input"]').as('chatInput').should('be.visible').clear().type('Please create a diagram', { delay: 0 });
         cy.get('[data-cy="send-button"]').should('be.enabled').click();
 
-        cy.wait(['@createSession', '@sendMessage', '@fetchSession']);
+        cy.wait(['@createSession', '@sendChat']);
         cy.wait('@renderSvg');
 
-        cy.get('[data-cy="diagram-history-panel"] [data-cy="inline-diagram"]', { timeout: 10000 }).should('exist');
+        // Diagrams now live inside the chat message list, not a separate panel
+        cy.get('[data-cy="inline-diagram"]', { timeout: 10000 }).should('exist');
 
-        cy.get('[data-cy="diagram-history-panel"] [data-cy="inline-diagram"]').last().invoke('attr', 'data-image-id').then((attr) => {
+        cy.get('[data-cy="inline-diagram"]').last().invoke('attr', 'data-image-id').then((attr) => {
             const diagramId = attr as string | null;
             expect(diagramId, 'inline diagram id attribute').to.be.a('string').and.not.be.empty;
 

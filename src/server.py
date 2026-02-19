@@ -19,6 +19,10 @@ from src.schemas import (
     AgentTraceListResponse,
     AgentTraceResponse,
     ArchitecturePlanResponse,
+    ChatBlock,
+    ChatEnvelope,
+    ChatRequest,
+    ChatState,
     DiagramFileResponse,
     ImageIRResponse,
     ImageResponse,
@@ -258,6 +262,142 @@ def message_api(session_id: str, payload: dict, db: DbSession = Depends(get_db))
         return JSONResponse(status_code=400, content={"error": str(exc)})
     except Exception as exc:
         return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+def _build_chat_envelope(result: dict, session_id: str) -> ChatEnvelope:
+    """Convert handle_message() result into a unified ChatEnvelope (specs_v42).
+
+    Image data comes from result["generated_images"] — a list built directly
+    from assistant_messages in session_service.handle_message(). Each entry is:
+        { image_id, image_version, diagram_type, ir_id }
+
+    tool_results entries have different shapes depending on origin:
+    - LLM diagram: { tool, output: { image_id, audit_id }, rendering_service, ... }
+    - MCP tool:    { tool, output: { ir_entries: [...], ... } }
+    Neither carries image_id at the top level for MCP tools, so we rely on
+    generated_images which is the authoritative source.
+    """
+    blocks: list[ChatBlock] = []
+    response_text: str = result.get("response", "") or ""
+    intent: str = result.get("intent", "") or ""
+    generated_images: list[dict] = result.get("generated_images") or []
+    tool_results: list[dict] = result.get("tool_results") or []
+
+    # Determine animation intent from the plan intent string
+    is_animation_intent = intent in ("animate",) or "anim" in str(intent).lower()
+
+    # ── Image blocks — sourced from generated_images (authoritative) ──
+    image_blocks: list[ChatBlock] = []
+    latest_ir_version: int | None = None
+    for img in generated_images:
+        img_id = img.get("image_id")
+        if not img_id:
+            continue
+        img_version = img.get("image_version")
+        diagram_type = img.get("diagram_type")
+        block_type = "animation" if is_animation_intent else "diagram"
+        payload: dict = {
+            "image_id": str(img_id),
+            "diagram_type": diagram_type,
+        }
+        if img_version is not None:
+            payload["ir_version"] = img_version
+            if latest_ir_version is None or img_version > latest_ir_version:
+                latest_ir_version = img_version
+        image_blocks.append(ChatBlock(block_type=block_type, payload=payload))
+
+    # ── Analysis block — from tool_results when intent is analysis-related ──
+    analysis_block: ChatBlock | None = None
+    if intent in ("analyze_architecture", "architecture_quality", "analysis"):
+        for tr in tool_results:
+            if not isinstance(tr, dict):
+                continue
+            # analysis result may sit at top level or inside output
+            candidate = tr if ("score" in tr or "issues" in tr or "quality_score" in tr) else tr.get("output", {})
+            if isinstance(candidate, dict) and ("score" in candidate or "issues" in candidate or "quality_score" in candidate):
+                analysis_block = ChatBlock(
+                    block_type="analysis",
+                    payload={
+                        "score": candidate.get("score") or candidate.get("quality_score"),
+                        "issues": candidate.get("issues") or candidate.get("violations") or [],
+                        "suggested_patches": candidate.get("suggested_patches") or candidate.get("patches") or [],
+                    },
+                )
+                break
+
+    # ── Assemble blocks: text first, then diagram/animation, then analysis ──
+    if response_text.strip():
+        blocks.append(ChatBlock(block_type="text", payload={"markdown": response_text}))
+
+    blocks.extend(image_blocks)
+
+    if analysis_block:
+        blocks.append(analysis_block)
+
+    # Fallback: always produce at least one block
+    if not blocks:
+        blocks.append(ChatBlock(block_type="text", payload={"markdown": response_text or "Done."}))
+
+    # ── response_type ──
+    has_diagram = bool(image_blocks)
+    has_analysis = analysis_block is not None
+    has_text = bool(response_text.strip())
+    if has_diagram and (has_analysis or has_text):
+        response_type = "mixed"
+    elif has_diagram:
+        anim_count = sum(1 for b in image_blocks if b.block_type == "animation")
+        response_type = "animation" if anim_count == len(image_blocks) and anim_count > 0 else "diagram"
+    elif has_analysis:
+        response_type = "analysis"
+    else:
+        response_type = "text"
+
+    state = ChatState(
+        ir_version=latest_ir_version,
+        has_diagram=has_diagram,
+        analysis_score=None,
+    )
+
+    return ChatEnvelope(
+        response_type=response_type,
+        blocks=blocks,
+        state=state,
+        confidence=1.0,
+        session_id=str(session_id),
+    )
+
+
+@app.post("/api/chat", response_model=ChatEnvelope)
+def chat_endpoint(payload: ChatRequest, db: DbSession = Depends(get_db)):
+    """Unified orchestration endpoint (specs_v42).
+
+    Accepts a user message, routes it through the existing agent pipeline,
+    and returns a typed ChatEnvelope. Creates a session automatically if
+    session_id is not provided.
+    """
+    # Create session if needed
+    session_id = payload.session_id
+    if session_id:
+        session = get_session(db, session_id)
+        if not session:
+            return JSONResponse(status_code=404, content={"error": "Session not found"})
+    else:
+        session = create_session(db)
+        session_id = str(session.id)
+
+    message = (payload.message or "").strip()
+    if not message:
+        return JSONResponse(status_code=400, content={"error": "message is required"})
+
+    try:
+        result = handle_message(db, session, message)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+    envelope = _build_chat_envelope(result, session_id)
+    return envelope
 
 
 @app.get("/api/sessions/{session_id}", response_model=SessionDetailResponse)

@@ -288,6 +288,8 @@ Task:
 Constraints:
 - Output ONLY Mermaid syntax, no prose, no markdown fences.
 - Use flowchart syntax (graph/flowchart) with the provided direction.
+- Do NOT use the "title" directive. Mermaid flowcharts do not support title as a body statement.
+- Always quote node labels that contain parentheses, braces or special characters, e.g. A["Business Users (BI)"] not A[Business Users (BI)].
 - Preserve all nodes and edges from the IR.
 - Use concise labels, but do not remove semantic meaning.
 - Use human/actor nodes when kind == person.

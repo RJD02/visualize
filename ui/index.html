@@ -9,6 +9,24 @@
 
 <body>
   <div id="root"></div>
+  <!-- Libraries used for client-side export (GIF recording, DOM -> canvas) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" crossorigin="anonymous"
+    referrerpolicy="no-referrer"></script>
+  <!-- GIF library removed from CDN to avoid 404; GIF export is optional and will be enabled when the library
+      is provided locally or installed as a dependency. See DiagramViewer.jsx for runtime handling. -->
+  <!-- Optional Font Awesome kit loader (loads only when window.ENABLE_FA_CDN=true) -->
+  <script>
+    try {
+      if (typeof window !== 'undefined' && window.ENABLE_FA_CDN) {
+        var fa = document.createElement('script');
+        fa.src = 'https://kit.fontawesome.com/4a593f9bd7.js';
+        fa.crossOrigin = 'anonymous';
+        document.head.appendChild(fa);
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  </script>
   <script type="module" src="/src/main.jsx"></script>
 </body>
 

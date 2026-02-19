@@ -49,3 +49,45 @@ def test_validate_mermaid_baseline_passes():
     result = validate_and_sanitize(MERMAID_ALLOWED, "mermaid")
     assert "graph LR" in result.sanitized_text
     assert result.blocked_tokens == []
+
+
+def test_sanitize_mermaid_strips_title_directive():
+    """Mermaid flowchart/graph blocks don't support 'title' as a body statement."""
+    mermaid_with_title = """graph TD
+    title Enterprise Open-Stack Architecture
+    A[Service A] --> B[Service B]
+    B --> C[(Database)]
+"""
+    result = validate_and_sanitize(mermaid_with_title, "mermaid")
+    assert "title" not in result.sanitized_text
+    assert "graph TD" in result.sanitized_text
+    assert "A[Service A] --> B[Service B]" in result.sanitized_text
+    assert result.blocked_tokens == []
+
+
+def test_sanitize_mermaid_quotes_labels_with_parentheses():
+    """Parentheses inside node labels must be quoted to avoid shape-syntax confusion."""
+    mermaid_with_parens = """graph TD
+    A[Business Users (BI)] --> B[Data Engineering]
+    B --> C{Decision (Final)}
+    D["Already Quoted (OK)"] --> E[No Parens]
+"""
+    result = validate_and_sanitize(mermaid_with_parens, "mermaid")
+    # Labels with parens should be quoted
+    assert 'A["Business Users (BI)"]' in result.sanitized_text
+    assert 'C{"Decision (Final)"}' in result.sanitized_text
+    # Already-quoted labels should be left alone
+    assert 'D["Already Quoted (OK)"]' in result.sanitized_text
+    # Labels without special chars should be untouched
+    assert "E[No Parens]" in result.sanitized_text
+    assert result.blocked_tokens == []
+
+
+def test_sanitize_mermaid_quotes_labels_with_braces():
+    """Braces inside node labels must be quoted."""
+    mermaid_with_braces = """graph LR
+    X[Config {json}] --> Y[Output]
+"""
+    result = validate_and_sanitize(mermaid_with_braces, "mermaid")
+    assert 'X["Config {json}"]' in result.sanitized_text
+    assert "Y[Output]" in result.sanitized_text

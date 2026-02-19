@@ -40,6 +40,7 @@ class SystemBoundary:
     name: str
     owners: List[str] = field(default_factory=list)
     children: List[str] = field(default_factory=list)
+    synthetic: bool = False
 
 @dataclass
 class SemanticIR:

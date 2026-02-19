@@ -1,0 +1,36 @@
+{
+  "plan_id": "PLAN-ICON-001",
+  "story_id": "story-01",
+  "approved_timestamp": "2026-02-19T00:00:00Z",
+  "tasks": [
+    {"id": 1, "title": "Add canonical SVG assets to ui/icons/", "description": "Add optimized SVG files for postgres, kafka, minio and service-generic."},
+    {"id": 2, "title": "Implement icon_injector module", "description": "Add injector module that resolves mapping, sanitizes SVG, generates <defs> sprite and injects <use> or cloned SVG into node <g>."},
+    {"id": 3, "title": "Wire injector into render pipeline behind feature flag", "description": "Add hook into `src/diagram/render_pipeline` guarded by config `ICON_INJECTION`."},
+    {"id": 4, "title": "Unit tests for mapping and sanitizer", "description": "Add `tests/unit/test_icon_injector.py` or JS equivalent to validate mapping, sanitizer, and idempotence."},
+    {"id": 5, "title": "Cypress E2E tests", "description": "Add `cypress/integration/icon_injection.spec.js` with headless tests for acceptance criteria."},
+    {"id": 6, "title": "CI wiring", "description": "Ensure CI runs unit tests then `cypress run --headless` for this story."}
+  ],
+  "allowed_file_scope": [
+    "ui/icons/*.svg",
+    "src/diagram/icon_injector.*",
+    "src/diagram/render_pipeline.*",
+    "tests/unit/test_icon_injector.*",
+    "cypress/integration/icon_injection.spec.*",
+    "cypress/**",
+    "requirements.txt (if adding python deps)"
+  ],
+  "constraints": {
+    "offline_only": true,
+    "no_external_cdn": true,
+    "preserve_svg_validity": true,
+    "feature_flag_enabled": "ICON_INJECTION"
+  },
+  "acceptance_summary": {
+    "postgres_icon": "SVG element for postgres present in output and visible",
+    "kafka_icon": "SVG element for kafka present and positioned correctly",
+    "minio_icon": "SVG element for minio present",
+    "unknown_service": "No icon injected and no runtime errors",
+    "technical": ["SVG valid XML","No console errors","No layout overlap","One icon per node"]
+  },
+  "draft_checksum_sha256": "a2df1c6ed54c042aaaac0aec42ec33ae751c369da8ccb82d97b747023c33dfb7"
+}

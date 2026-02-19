@@ -1,0 +1,9 @@
+/* Minimal test styles for icon injection page */
+.anim-node {
+  animation: svg-fade 0.8s infinite alternate;
+}
+
+@keyframes svg-fade {
+  from { opacity: 1; }
+  to { opacity: 0.2; }
+}

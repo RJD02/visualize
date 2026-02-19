@@ -1512,6 +1512,19 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
 
     db.commit()
 
+    # Build generated_images list from assistant_messages so callers (e.g. /api/chat)
+    # can build a typed response envelope without having to query the DB again.
+    generated_images = [
+        {
+            "image_id": str(msg.image_id),
+            "image_version": getattr(msg, "image_version", None),
+            "diagram_type": getattr(msg, "diagram_type", None),
+            "ir_id": str(msg.ir_id) if getattr(msg, "ir_id", None) else None,
+        }
+        for msg in assistant_messages
+        if msg.message_type == "image" and msg.image_id
+    ]
+
     return {
         "intent": intent,
         "response": response_text,
@@ -1519,6 +1532,7 @@ def handle_message(db: DbSession, session: Session, message: str) -> dict:
         "plan": plan_result,
         "plan_id": str(plan_record.id),
         "tool_results": tool_results,
+        "generated_images": generated_images,
     }
 
 

@@ -8,7 +8,7 @@ def _safe_id(name: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in name).lower()
 
 
-def plan_to_semantic_ir(plan, diagram_type: str = "context") -> SemanticIR:
+def plan_to_semantic_ir(plan, diagram_type: str = "context", prompt: str = None) -> SemanticIR:
     title = getattr(plan, "system_name", "Architecture")
     components = []
     boundaries = []
@@ -42,5 +42,28 @@ def plan_to_semantic_ir(plan, diagram_type: str = "context") -> SemanticIR:
                 seen.add(n)
         rels.append(Relationship(source=src, target=tgt, type="association", label=getattr(r, "description", None), order=None))
 
+    # Deterministic relationship extraction from prompt (if provided)
+    if prompt:
+        try:
+            from src.ir.relationship_extractor import extract_relationships
+            block_ids = [c.id for c in components]
+            blocks = [{"id": bid} for bid in block_ids]
+            edges = extract_relationships(prompt, blocks)
+            for edge in edges:
+                # Only add if not already present
+                if not any(r.source == edge.from_ and r.target == edge.to for r in rels):
+                    rels.append(Relationship(source=edge.from_, target=edge.to, type=edge.relation_type, label=edge.label, order=None))
+        except Exception as e:
+            pass  # fail open, don't block IR
+
     ir = SemanticIR(id=_safe_id(title), title=title, actors=[], components=components, relationships=rels, boundaries=boundaries)
+
+    # Apply semantic clustering before layout/rendering (specs_v45)
+    try:
+        from src.ir.semantic_clustering import cluster_ir
+        ir = cluster_ir(ir)
+    except Exception:
+        # fail-open: do not block IR generation on clustering errors
+        pass
+
     return ir

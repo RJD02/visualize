@@ -175,3 +175,33 @@ class MCPExecuteRequest(BaseModel):
 class MCPExecuteResponse(BaseModel):
     result: Dict[str, Any]
     audit_id: Optional[UUID] = None
+
+
+# ---------------------------------------------------------------------------
+# Unified Chat Envelope (specs_v42)
+# ---------------------------------------------------------------------------
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+    current_ir: Optional[Dict[str, Any]] = None
+    conversation_id: Optional[str] = None
+
+
+class ChatBlock(BaseModel):
+    block_type: str  # "text" | "diagram" | "analysis" | "animation" | "action"
+    payload: Dict[str, Any]
+
+
+class ChatState(BaseModel):
+    ir_version: Optional[int] = None
+    has_diagram: bool = False
+    analysis_score: Optional[float] = None
+
+
+class ChatEnvelope(BaseModel):
+    response_type: str  # "diagram" | "analysis" | "text" | "mixed" | "animation"
+    blocks: List[ChatBlock]
+    state: ChatState
+    confidence: float
+    session_id: str
