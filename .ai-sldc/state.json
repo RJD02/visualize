@@ -1,4 +1,10 @@
 {
+  "kind": "feature",
+  "id": "story-02",
+  "phase": "completed"
+}
+
+{
   "kind": "debug",
   "bug_id": "BUG-ICON-01",
   "phase": "completed",

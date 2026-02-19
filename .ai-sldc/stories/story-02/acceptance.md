@@ -1,3 +1,14 @@
+# Story-02 Acceptance Criteria
+
+Minimum acceptance for `story-02`:
+
+1. A draft plan `.ai-sldc/plans/PLAN-story-02.draft.md` is present and describes the proposed fix, scope, tests, risks, and rollback strategy.
+2. Repository state updated to show `phase: awaiting_approval` in `.ai-sldc/state.json`.
+3. An entry is appended to `.ai-sldc/logs/execution.log` recording `PLAN_CREATED` for `story-02`.
+4. All changes are limited to `.ai-sldc/*` (planning artifacts) during this planning invocation.
+
+Notes:
+- Implementation, tests, and commits to source code will happen only after plan approval.
 # Acceptance Criteria: Diagram Quality Improvement
 
 ## Functional Acceptance

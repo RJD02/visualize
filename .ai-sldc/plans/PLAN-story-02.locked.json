@@ -1,0 +1,12 @@
+{
+  "plan_id": "PLAN-story-02",
+  "kind": "feature",
+  "entity_id": "story-02",
+  "allowed_scope": [
+    ".ai-sldc/*"
+  ],
+  "tasks": [],
+  "constraints": [],
+  "acceptance_summary": "See .ai-sldc/stories/story-02/acceptance.md",
+  "draft_checksum": "9f6e886cd3738ac937f86c190f8b853e49400276d5de433e7ba43276a6d05d3b"
+}

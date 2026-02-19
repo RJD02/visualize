@@ -1,3 +1,22 @@
+# Story: story-02 — Feature intent
+
+Goal
+----
+Add the feature described by `story-02`: implement the minimal, deterministic change required to satisfy the acceptance criteria in `acceptance.md`.
+
+Context
+-------
+- This is a feature workflow. Changes will be limited to the files listed in the plan.
+- Work must be auditable and deterministic per the Autonomous Governed SDLC.
+
+Non-goals
+---------
+- Broad refactors outside the allowed scope
+- Any external network dependencies in tests
+
+Owner
+-----
+Engineering (automated agent)
 # Story: Improve Diagram Quality Using Real-World Architectural Patterns
 
 ## Objective

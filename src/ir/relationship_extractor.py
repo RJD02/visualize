@@ -48,8 +48,38 @@ def extract_relationships(prompt: str, blocks: List[Dict[str, Any]], *, max_edge
             src = src_match.group(1).strip() if src_match else None
             tgt_match = re.search(r"to ([A-Za-z0-9_\- ]+|all services|all components|all nodes)", after)
             tgt = tgt_match.group(1).strip() if tgt_match else None
+            # Fallback: handle verb-first prompts like "Connect A to B"
+            if not src or not tgt:
+                m2 = re.search(r"([A-Za-z0-9_\- ]+) to ([A-Za-z0-9_\- ]+)", prompt_lc)
+                if m2:
+                    src_cand = src or m2.group(1).strip()
+                    tgt_cand = tgt or m2.group(2).strip()
+                    # Strip leading verb (e.g., 'connect a') if present
+                    if src_cand and src_cand.startswith(relation_type):
+                        src_cand = src_cand[len(relation_type):].strip()
+                    # Map to existing block ids by case-insensitive match if possible
+                    src = None
+                    tgt = None
+                    for b in block_ids:
+                        if src_cand and b.lower() == src_cand.lower():
+                            src = b
+                        if tgt_cand and b.lower() == tgt_cand.lower():
+                            tgt = b
+                    # Fallback to raw candidates if mapping failed
+                    src = src or src_cand
+                    tgt = tgt or tgt_cand
+
             if src and tgt:
+                # Map extracted names to canonical block ids (preserve casing)
+                src = next((b for b in block_ids if b.lower() == src.lower()), src)
                 targets = _expand_targets(tgt, blocks)
+                # map targets similarly
+                mapped_targets = []
+                for t in targets:
+                    mapped_targets.append(next((b for b in block_ids if b.lower() == t.lower()), t))
+                targets = mapped_targets
+                # remove self-targets (e.g., 'all services' should exclude the source)
+                targets = [t for t in targets if t.lower() != src.lower()]
                 for t in targets:
                     e = Edge(
                         edge_id=make_edge_id(),
