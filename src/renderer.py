@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import requests
+import re
 
 from src.utils.config import settings
 from src.utils.file_utils import ensure_dir
@@ -115,10 +116,34 @@ def render_plantuml_svg(plantuml_text: str, output_name: str) -> str:
             else:
                 raise
     output_path = Path(output_dir) / f"{output_name}.svg"
-    output_path.write_bytes(response.content)
+    # Normalize SVG to remove non-deterministic metadata (timestamps, comments, transient ids)
+    try:
+        normalized = _normalize_svg(response.content)
+    except Exception:
+        normalized = response.content
+    output_path.write_bytes(normalized)
     return str(output_path)
 
 
 def render_plantuml(plantuml_text: str, output_name: str) -> str:
     """Backward-compatible PNG rendering."""
     return render_plantuml_png(plantuml_text, output_name)
+
+
+def _normalize_svg(svg_bytes: bytes) -> bytes:
+    """Return a deterministic form of an SVG by removing comments, timestamps, and transient ids.
+
+    This is a minimal normalization to guard against non-deterministic metadata injected
+    by remote renderers (e.g., timestamps, generator comments, random id attributes).
+    It intentionally keeps the visual content intact while removing common noisy fields.
+    """
+    text = svg_bytes.decode("utf-8", errors="ignore")
+    # remove XML comments
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    # remove common timestamp attributes or elements (e.g., 'timestamp' or 'generated')
+    text = re.sub(r"\s(timestamp|data-timestamp|generated|generator)=[\'\"][^\'\"]+[\'\"]", "", text, flags=re.IGNORECASE)
+    # remove id attributes that look like randomized ids (start with '_' or are long hex-like)
+    text = re.sub(r"\sid=\"(_[A-Za-z0-9:-]{3,}|[0-9a-fA-F]{6,})\"", "", text)
+    # collapse repeated whitespace and strip leading/trailing whitespace
+    text = re.sub(r"\n\s+", "\n", text)
+    return text.encode("utf-8")
