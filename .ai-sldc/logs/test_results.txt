@@ -1,0 +1,4 @@
+Unit tests: 175 passed, 1 skipped
+Cypress e2e: 3 passing, 0 failing
+
+Full pytest output and Cypress logs are available in CI artifacts if needed.
