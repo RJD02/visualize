@@ -67,6 +67,7 @@ import src.animation.css_injector as css_module
 import src.animation.diagram_renderer as renderer_module
 import json
 from src import architecture_quality_agent as architecture_quality_agent
+from src.icons.inject import inline_use_references
 
 app = FastAPI(title="Architecture Visualization API")
 
@@ -701,6 +702,15 @@ def render_diagram_api(payload: dict, db: DbSession = Depends(get_db)):
     if mode == 'static':
         if enhanced:
             svg_text = render_svg(svg_text, animated=False, enhanced=True, semantic_intent=semantic_intent)
+        # Only attempt to inline when the SVG contains <use> or symbol references
+        txt_lower = (svg_text or '').lower()
+        try:
+            if ('<use' in txt_lower) or ('xlink:href' in txt_lower) or ('<symbol' in txt_lower):
+                # avoid re-inlining if already inlined
+                if 'data-inlined-from' not in txt_lower:
+                    svg_text = inline_use_references(svg_text)
+        except Exception:
+            pass
         return JSONResponse(content={'svg': svg_text})
 
     # animated mode
@@ -800,6 +810,15 @@ def render_diagram_svg(
         svg_text = render_svg(svg_text, animated=True, debug=debug, enhanced=enhanced, semantic_intent=semantic_intent, use_v2=enhanced)
     elif enhanced:
         svg_text = render_svg(svg_text, animated=False, debug=debug, enhanced=True, semantic_intent=semantic_intent)
+
+    # Only inline when necessary as above
+    try:
+        txt_lower = (svg_text or '').lower()
+        if ('<use' in txt_lower) or ('xlink:href' in txt_lower) or ('<symbol' in txt_lower):
+            if 'data-inlined-from' not in txt_lower:
+                svg_text = inline_use_references(svg_text)
+    except Exception:
+        pass
 
     return JSONResponse(content={"svg": svg_text})
 

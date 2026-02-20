@@ -1,7 +1,8 @@
 {
   "kind": "debug",
-  "bug_id": "BUG-ICON-01",
+  "id": "BUG-ICON-01",
   "phase": "completed",
-  "timestamp": "2026-02-19T11:40:00Z",
+  "branch": "feature/BUG-ICON-01",
+  "confidence": 0.95,
   "plan_id": "PLAN-BUG-ICON-01"
 }
