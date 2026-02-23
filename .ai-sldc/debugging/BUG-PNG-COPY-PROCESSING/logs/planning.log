@@ -1,0 +1,19 @@
+[2026-02-23T00:00:00Z]
+
+KIND: debug
+ID: BUG-PNG-COPY-PROCESSING
+PLAN_ID: PLAN-BUG-COPY-PNG-STUCK-01
+PHASE: planning
+ACTION: Created draft plan PLAN-BUG-COPY-PNG-STUCK-01.draft.md
+REASON: Analyzed DiagramViewer.jsx copyPngToClipboard() and pngExport.js exportSvgToPng().
+        Found that exportSvgToPng() has no timeout mechanism; if canvas.toBlob()
+        callback never fires (tainted canvas, GC race, browser policy), the Promise
+        never settles and setBusy(false) in the finally block never executes.
+        Also found that shared busy state between Copy PNG / Download PNG / Record GIF
+        causes "Record GIF" button to misleadingly show "Processing..." when Copy PNG hangs.
+OUTCOME: Draft plan written to plans/PLAN-BUG-COPY-PNG-STUCK-01.draft.md.
+         Plan covers: Promise.race timeout in exportSvgToPng, per-button busy state
+         separation in DiagramViewer, inline error display, Playwright regression spec.
+NEXT_STATE: awaiting_approval
+
+------------------------------------------------------------
