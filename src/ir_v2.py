@@ -141,7 +141,29 @@ class IRVersion:
 
 
 def validate_ir(payload: Dict[str, Any]) -> None:
+    # Normalize older 'relations' key into schema-required 'edges' to support
+    # backward-compatible inputs during validation.
     try:
+        diagram = payload.get("ir", {}).get("diagram") if isinstance(payload, dict) else None
+        if isinstance(diagram, dict) and "edges" not in diagram and "relations" in diagram:
+            relations = diagram.get("relations", [])
+            edges = []
+            for rel in relations:
+                edge = Edge(
+                    edge_id=make_edge_id(),
+                    from_=rel.get("from") or rel.get("src") or "",
+                    to=rel.get("to") or rel.get("dst") or "",
+                    relation_type=rel.get("relation_type") or rel.get("type") or "relation",
+                    direction=rel.get("direction") or "unidirectional",
+                    category=rel.get("category") or "data_flow",
+                    mode=rel.get("mode") or "sync",
+                    label=rel.get("label") or "",
+                    confidence=rel.get("confidence") if isinstance(rel.get("confidence"), (int, float)) else 1.0,
+                )
+                edges.append(edge.to_dict())
+            # inject edges into payload for validation
+            payload.setdefault("ir", {}).setdefault("diagram", {})["edges"] = edges
+
         _VALIDATOR.validate(payload)
     except ValidationError as exc:
         raise ValueError(f"IR validation failed: {exc.message}") from exc
@@ -188,7 +210,7 @@ def upgrade_to_v2(ir_payload: Dict[str, Any], *, diagram_id: Optional[str] = Non
             "id": diagram_id or "diagram",
             "type": ir_payload.get("diagram_type", "diagram"),
             "blocks": [],
-            "relations": [],
+            "edges": [],
         }
     wrapper = {
         "diagram_id": diagram_id or diagram.get("id") or "diagram",
