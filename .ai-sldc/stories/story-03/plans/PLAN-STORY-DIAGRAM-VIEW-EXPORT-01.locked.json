@@ -1,0 +1,49 @@
+{
+  "plan_id": "PLAN-STORY-DIAGRAM-VIEW-EXPORT-01",
+  "kind": "feature",
+  "entity_id": "STORY-DIAGRAM-VIEW-EXPORT-01",
+  "allowed_scope": [
+    "ui/src/diagram/DiagramViewer.jsx",
+    "ui/src/diagram/pngExport.js",
+    "tests/e2e/story03_export_zoom.spec.js",
+    "tests/unit/test_png_export.js",
+    "playwright.config.js"
+  ],
+  "tasks": [
+    {
+      "id": "T1",
+      "description": "Create ui/src/diagram/pngExport.js — SVG→canvas export at configurable scale",
+      "files": ["ui/src/diagram/pngExport.js"]
+    },
+    {
+      "id": "T2",
+      "description": "Modify ui/src/diagram/DiagramViewer.jsx — add zoom/pan state, viewBox manipulation, zoom control bar, replace html2canvas with SVG→canvas export, add maximize toggle",
+      "files": ["ui/src/diagram/DiagramViewer.jsx"]
+    },
+    {
+      "id": "T3",
+      "description": "Create tests/e2e/story03_export_zoom.spec.js — Playwright e2e for zoom controls + PNG export with screenshot evidence",
+      "files": ["tests/e2e/story03_export_zoom.spec.js"]
+    },
+    {
+      "id": "T4",
+      "description": "Create tests/unit/test_png_export.js — Playwright unit test for SVG dimension parsing and canvas scale logic",
+      "files": ["tests/unit/test_png_export.js"]
+    },
+    {
+      "id": "T5",
+      "description": "Create playwright.config.js — root Playwright configuration with screenshot/video/trace settings",
+      "files": ["playwright.config.js"]
+    }
+  ],
+  "constraints": [
+    "No external runtime dependencies added (use native browser Canvas API)",
+    "Export is offline-deterministic: same SVG + same scale => same PNG dimensions",
+    "Zoom operates only on SVG viewBox — never affects browser/page zoom",
+    "Existing icon tests must continue to pass (no regression)",
+    "All changes isolated to allowed_scope files only",
+    "src/ server code must not be modified"
+  ],
+  "acceptance_summary": "Feature A: PNG export replaces html2canvas with SVG→canvas at 2x default scale, deterministic, offline. Feature B: In-canvas zoom (in/out/reset/fit) + drag-to-pan + maximize via SVG viewBox manipulation, no pixelation. Evidence: Playwright screenshots before/after zoom + exported PNG + run-meta.json in .ai-sldc/stories/story-03/evidence/ui/.",
+  "draft_checksum": "443f5a7e2e624aba414e35417237e2ec07ee3820bf4b262544a3106c7910fc95"
+}

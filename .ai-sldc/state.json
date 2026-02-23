@@ -1,8 +1,8 @@
 {
-  "kind": "debug",
-  "id": "BUG-ICON-01",
-  "phase": "completed",
-  "branch": "feature/BUG-ICON-01",
-  "confidence": 0.95,
-  "plan_id": "PLAN-BUG-ICON-01"
+  "kind": "feature",
+  "id": "STORY-DIAGRAM-VIEW-EXPORT-01",
+  "phase": "pr_preparation",
+  "branch": "feature/story-03-export-zoom",
+  "confidence": 0.98,
+  "plan_id": "PLAN-STORY-DIAGRAM-VIEW-EXPORT-01"
 }

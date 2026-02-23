@@ -1,0 +1,20 @@
+{
+  "entity_id": "STORY-DIAGRAM-VIEW-EXPORT-01",
+  "plan_id": "PLAN-STORY-DIAGRAM-VIEW-EXPORT-01",
+  "timestamp": "2026-02-23T04:54:33.180Z",
+  "exit_code": 0,
+  "export_scale": 2,
+  "canvas_width": 1600,
+  "canvas_height": 600,
+  "png_file": "/home/goku/dev/visualization/worktrees/icons/.ai-sldc/stories/story-03/evidence/ui/exports/STORY-DIAGRAM-VIEW-EXPORT-01-export-2026-02-23T04-54-33-111Z.png",
+  "png_size_bytes": 32446,
+  "screenshots": [
+    "/home/goku/dev/visualization/worktrees/icons/.ai-sldc/stories/story-03/evidence/ui/screenshots/STORY-DIAGRAM-VIEW-EXPORT-01-baseline-*.png",
+    "/home/goku/dev/visualization/worktrees/icons/.ai-sldc/stories/story-03/evidence/ui/screenshots/STORY-DIAGRAM-VIEW-EXPORT-01-zoomed-in-*.png",
+    "/home/goku/dev/visualization/worktrees/icons/.ai-sldc/stories/story-03/evidence/ui/screenshots/STORY-DIAGRAM-VIEW-EXPORT-01-fit-to-view-*.png",
+    "/home/goku/dev/visualization/worktrees/icons/.ai-sldc/stories/story-03/evidence/ui/screenshots/STORY-DIAGRAM-VIEW-EXPORT-01-after-export-2026-02-23T04-54-33-125Z.png"
+  ],
+  "tests_passed": 9,
+  "tests_failed": 0,
+  "duration_ms": 1771822473180
+}
