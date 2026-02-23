@@ -1,0 +1,28 @@
+{
+  "plan_id": "PLAN-STORY-DIAGRAM-COHESION-01",
+  "kind": "feature",
+  "entity_id": "STORY-DIAGRAM-COHESION-01",
+  "locked_at": "2026-02-23T07:25:01Z",
+  "allowed_scope": [
+    "src/tools/ir_enricher.py",
+    "src/agents/diagram_agent.py",
+    "tests/unit/test_connectivity_inferencer.py",
+    "tests/e2e/story04_diagram_cohesion.spec.js",
+    ".ai-sldc/stories/story-04/"
+  ],
+  "tasks": [
+    "Extend _IREnricher with _infer_missing_connections() using zone-cascade, tech-dependency, and completion-guard rules",
+    "Wire enrich_ir() into diagram_agent.py before renderer dispatch",
+    "Add helper _merge_inferred_edges() to convert enriched edges back to ArchitecturePlan relationships",
+    "Write 8 unit tests in test_connectivity_inferencer.py",
+    "Write Playwright E2E spec story04_diagram_cohesion.spec.js",
+    "Commit SDLC artifacts and source changes"
+  ],
+  "constraints": [
+    "No changes to plantuml_renderer.py or mermaid_renderer.py",
+    "No IR schema changes",
+    "Inference uses sorted() \u2014 no nondeterminism"
+  ],
+  "acceptance_summary": "isolated_nodes/total_nodes <= 0.15; total_edges >= max(total_nodes-1, 10); inferred edges are dashed and explainable; same input yields same output",
+  "draft_checksum": "84a4b1e3c124951b"
+}
