@@ -46,15 +46,25 @@ export function parseSvgDimensions(svgMarkup) {
     }
 }
 
+/** Maximum time (ms) the export pipeline is allowed before rejecting.
+ *  Prevents the caller's busy/loading state from hanging indefinitely when
+ *  canvas.toBlob() silently never fires (tainted canvas, browser GC race, etc.)
+ *  BUG-PNG-COPY-PROCESSING / PLAN-BUG-COPY-PNG-STUCK-01
+ */
+export const EXPORT_TIMEOUT_MS = 10_000;
+
 /**
  * Export SVG markup to a PNG Blob at the given scale factor.
+ *
+ * Resolves within EXPORT_TIMEOUT_MS or rejects with a clear timeout error
+ * so the caller's finally-block always runs and loading state always resets.
  *
  * @param {string} svgMarkup  Full SVG string (with inlined icon symbols).
  * @param {number} exportScale  Multiplier applied to SVG native dimensions (default 2).
  * @returns {Promise<{ blob: Blob, width: number, height: number }>}
  */
 export function exportSvgToPng(svgMarkup, exportScale = 2) {
-    return new Promise((resolve, reject) => {
+    const exportPromise = new Promise((resolve, reject) => {
         const dims = parseSvgDimensions(svgMarkup);
         const nativeW = dims ? dims.w : 800;
         const nativeH = dims ? dims.h : 600;
@@ -130,4 +140,13 @@ export function exportSvgToPng(svgMarkup, exportScale = 2) {
         };
         img.src = url;
     });
+
+    const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(
+            () => reject(new Error(`PNG export timed out after ${EXPORT_TIMEOUT_MS / 1000}s — canvas may be tainted or browser policy blocked image load`)),
+            EXPORT_TIMEOUT_MS
+        )
+    );
+
+    return Promise.race([exportPromise, timeoutPromise]);
 }

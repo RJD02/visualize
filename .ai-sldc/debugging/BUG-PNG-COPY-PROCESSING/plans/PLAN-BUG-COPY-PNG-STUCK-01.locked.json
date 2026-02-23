@@ -1,0 +1,27 @@
+{
+  "plan_id": "PLAN-BUG-COPY-PNG-STUCK-01",
+  "kind": "debug",
+  "entity_id": "BUG-PNG-COPY-PROCESSING",
+  "locked_at": "2026-02-23T07:25:01Z",
+  "allowed_scope": [
+    "ui/src/diagram/pngExport.js",
+    "ui/src/diagram/DiagramViewer.jsx",
+    "tests/e2e/bug_copy_png_regression.spec.js",
+    "tests/unit/test_png_export.spec.js",
+    ".ai-sldc/debugging/BUG-PNG-COPY-PROCESSING/"
+  ],
+  "tasks": [
+    "Add Promise.race timeout (10s) wrapper to exportSvgToPng() in pngExport.js",
+    "Replace shared busy state with per-button states in DiagramViewer.jsx",
+    "Replace alert() calls with inline error display for PNG copy operations",
+    "Write Playwright regression spec bug_copy_png_regression.spec.js",
+    "Extend test_png_export.spec.js with timeout behavior tests"
+  ],
+  "constraints": [
+    "Do not break Download PNG",
+    "Do not touch Record GIF logic beyond state separation",
+    "No backend changes"
+  ],
+  "acceptance_summary": "Copy PNG completes or fails within 10s; button state always resets; clear error message shown; Download PNG unaffected",
+  "draft_checksum": "024ecb31ec93bc56"
+}

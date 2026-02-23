@@ -21,7 +21,12 @@ export default function DiagramViewer({ svgMarkup, className = '', onBlockSelect
     const containerRef = useRef(null);
 
     // ── export ────────────────────────────────────────────────────────────────
-    const [busy, setBusy] = useState(false);
+    // Per-button busy state (BUG-PNG-COPY-PROCESSING): prevents one stalled
+    // operation from freezing unrelated buttons or showing wrong labels.
+    const [copyPngBusy, setCopyPngBusy] = useState(false);
+    const [downloadPngBusy, setDownloadPngBusy] = useState(false);
+    const [gifBusy, setGifBusy] = useState(false);
+    const [pngCopyError, setPngCopyError] = useState('');
     const [exportScale, setExportScale] = useState(2);
 
     // ── zoom / pan ─────────────────────────────────────────────────────────────
@@ -202,46 +207,47 @@ export default function DiagramViewer({ svgMarkup, className = '', onBlockSelect
     // ── PNG export (SVG→canvas, high resolution) ──────────────────────────────
     const downloadPng = async () => {
         if (!processedMarkup) return;
-        setBusy(true);
+        setDownloadPngBusy(true);
         try {
             const { blob } = await exportSvgToPng(processedMarkup, exportScale);
             downloadBlob(blob, 'diagram.png');
         } catch (err) {
             alert('PNG export failed: ' + (err?.message || err));
         } finally {
-            setBusy(false);
+            setDownloadPngBusy(false);
         }
     };
 
     const copyPngToClipboard = async () => {
         if (!processedMarkup) return;
-        setBusy(true);
+        setCopyPngBusy(true);
+        setPngCopyError('');
         try {
             const { blob } = await exportSvgToPng(processedMarkup, exportScale);
             if (navigator.clipboard && navigator.clipboard.write && typeof window.ClipboardItem === 'function') {
                 try {
-                    const item = new window.ClipboardItem({ 'image/png': blob });
-                    await navigator.clipboard.write([item]);
-                    alert('PNG copied to clipboard');
+                    const clipItem = new window.ClipboardItem({ 'image/png': blob });
+                    await navigator.clipboard.write([clipItem]);
                 } catch (_) {
+                    // Clipboard write blocked (permissions / non-secure context) — fall back to download.
                     downloadBlob(blob, 'diagram.png');
-                    alert('PNG copy not available; downloaded instead');
+                    setPngCopyError('Clipboard not available — PNG downloaded instead.');
                 }
             } else {
                 downloadBlob(blob, 'diagram.png');
-                alert('PNG copy not available in this browser; downloaded instead');
+                setPngCopyError('Clipboard API not supported — PNG downloaded instead.');
             }
         } catch (err) {
-            alert('PNG copy failed: ' + (err?.message || err));
+            setPngCopyError((err?.message || 'PNG copy failed') + ' — try Download PNG.');
         } finally {
-            setBusy(false);
+            setCopyPngBusy(false);
         }
     };
 
     const recordGif = async ({ duration = 2000, fps = 8 } = {}) => {
         if (!containerRef.current) return;
         if (!window.GIF) { alert('GIF library not available'); return; }
-        setBusy(true);
+        setGifBusy(true);
         try {
             const frameDelay = Math.round(1000 / fps);
             const frames = Math.max(2, Math.round((duration / 1000) * fps));
@@ -253,10 +259,10 @@ export default function DiagramViewer({ svgMarkup, className = '', onBlockSelect
                 // eslint-disable-next-line no-await-in-loop
                 await new Promise((r) => setTimeout(r, frameDelay));
             }
-            gif.on('finished', (blob) => { downloadBlob(blob, 'diagram.gif'); setBusy(false); });
+            gif.on('finished', (blob) => { downloadBlob(blob, 'diagram.gif'); setGifBusy(false); });
             gif.render();
         } catch (err) {
-            setBusy(false);
+            setGifBusy(false);
             alert('GIF export failed: ' + (err?.message || err));
         }
     };
@@ -331,10 +337,10 @@ export default function DiagramViewer({ svgMarkup, className = '', onBlockSelect
 
             {/* ── Export controls ─────────────────────────────────────────── */}
             <div className="mt-2 flex gap-2 items-center flex-wrap">
-                <button className={BTN} onClick={copySvgToClipboard} disabled={busy}>
+                <button className={BTN} onClick={copySvgToClipboard}>
                     Copy SVG
                 </button>
-                <button className={BTN} onClick={downloadSvg} disabled={busy}>
+                <button className={BTN} onClick={downloadSvg}>
                     Download SVG
                 </button>
                 <select
@@ -354,22 +360,36 @@ export default function DiagramViewer({ svgMarkup, className = '', onBlockSelect
                     data-cy="download-png"
                     className={BTN}
                     onClick={downloadPng}
-                    disabled={busy}
+                    disabled={downloadPngBusy}
                     title={`Export PNG at ${exportScale}x`}
                 >
-                    Download PNG
+                    {downloadPngBusy ? 'Exporting…' : 'Download PNG'}
                 </button>
-                <button className={BTN} onClick={copyPngToClipboard} disabled={busy}>
-                    Copy PNG
+                <button
+                    data-cy="copy-png"
+                    className={BTN}
+                    onClick={copyPngToClipboard}
+                    disabled={copyPngBusy}
+                >
+                    {copyPngBusy ? 'Copying…' : 'Copy PNG'}
                 </button>
                 <button
                     className={BTN_ACTIVE}
                     onClick={() => recordGif({ duration: 2000, fps: 8 })}
-                    disabled={busy}
+                    disabled={gifBusy}
                 >
-                    {busy ? 'Processing…' : 'Record GIF'}
+                    {gifBusy ? 'Processing…' : 'Record GIF'}
                 </button>
             </div>
+            {/* ── Copy PNG inline error (BUG-PNG-COPY-PROCESSING) ─────────── */}
+            {pngCopyError && (
+                <div
+                    data-cy="copy-png-error"
+                    className="mt-1 text-xs text-rose-300 bg-rose-950/40 border border-rose-900 rounded px-2 py-1"
+                >
+                    {pngCopyError}
+                </div>
+            )}
         </div>
     );
 }

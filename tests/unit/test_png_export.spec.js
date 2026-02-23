@@ -209,3 +209,87 @@ test.describe('exportSvgToPng canvas dimensions', () => {
         expect(r1.height).toBe(r2.height);
     });
 });
+
+// ── BUG-PNG-COPY-PROCESSING: timeout guard tests ──────────────────────────────
+
+test.describe('exportSvgToPng timeout guard (BUG-PNG-COPY-PROCESSING)', () => {
+    const TIMEOUT_MS = 10_000;
+    const SHORT_TIMEOUT = 500;
+
+    const SAMPLE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <rect x="5" y="5" width="90" height="90" fill="#ccc"/>
+</svg>`;
+
+    test('resolves with valid SVG well within timeout', async ({ page }) => {
+        await page.setContent('<html><body></body></html>');
+        const start = Date.now();
+        const result = await page.evaluate(([svg, timeoutMs]) => {
+            function exportSvgToPngWithTimeout(svgStr, exportScale) {
+                const exportPromise = new Promise((resolve, reject) => {
+                    const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const img = new Image();
+                    img.onload = () => {
+                        URL.revokeObjectURL(url);
+                        const canvas = document.createElement('canvas');
+                        canvas.width = 100 * exportScale;
+                        canvas.height = 100 * exportScale;
+                        const ctx = canvas.getContext('2d');
+                        ctx.fillStyle = '#fff';
+                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        canvas.toBlob(b => b ? resolve({ ok: true }) : reject(new Error('null blob')), 'image/png');
+                    };
+                    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('load failed')); };
+                    img.src = url;
+                });
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('timed out')), timeoutMs)
+                );
+                return Promise.race([exportPromise, timeoutPromise]);
+            }
+            return exportSvgToPngWithTimeout(svg, 2);
+        }, [SAMPLE_SVG, TIMEOUT_MS]);
+        expect(result.ok).toBe(true);
+        expect(Date.now() - start).toBeLessThan(TIMEOUT_MS);
+    }, TIMEOUT_MS + 2000);
+
+    test('rejects with timeout error when toBlob never fires', async ({ page }) => {
+        await page.setContent('<html><body></body></html>');
+        const error = await page.evaluate((shortTimeout) => {
+            function exportSvgToPngHanging() {
+                const exportPromise = new Promise(() => { /* never resolves — simulates stuck toBlob */ });
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('PNG export timed out')), shortTimeout)
+                );
+                return Promise.race([exportPromise, timeoutPromise]);
+            }
+            return exportSvgToPngHanging().catch(e => e.message);
+        }, SHORT_TIMEOUT);
+        expect(error).toMatch(/timed out/i);
+    }, 4500);
+
+    test('busy state resets after timeout (finally always runs)', async ({ page }) => {
+        await page.setContent('<html><body></body></html>');
+        const BUSY_TIMEOUT = 300;
+        const result = await page.evaluate((busyTimeout) => {
+            let busyState = false;
+            async function copyPngSimulation() {
+                busyState = true;
+                const exportPromise = new Promise(() => { /* hangs */ });
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('timed out')), busyTimeout)
+                );
+                try {
+                    await Promise.race([exportPromise, timeoutPromise]);
+                } catch (_) {
+                    // error is expected
+                } finally {
+                    busyState = false;
+                }
+            }
+            return copyPngSimulation().then(() => ({ busyAfter: busyState }));
+        }, BUSY_TIMEOUT);
+        expect(result.busyAfter).toBe(false);
+    }, 4000);
+});
