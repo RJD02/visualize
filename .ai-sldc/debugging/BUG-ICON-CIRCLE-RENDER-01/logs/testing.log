@@ -1,0 +1,69 @@
+[2026-02-23T00:05:00Z]
+
+KIND: debug
+ID: BUG-ICON-CIRCLE-RENDER-01
+PLAN_ID: PLAN-BUG-ICON-CIRCLE-RENDER-01
+PHASE: testing
+ACTION: Ran Python unit tests (pytest tests/unit/)
+REASON: Regression guard + fix validation required
+OUTCOME: PASS — 18 tests passed, 0 failed
+         test_inject_icons_creates_defs_and_symbols          PASSED
+         test_inject_icons_use_has_position_attributes       PASSED
+         test_brand_icon_symbol_contains_real_paths          PASSED
+         test_data_icon_injected_flag_is_set                 PASSED
+         test_render_pipeline_leaves_use_intact              PASSED
+         test_mapping_resolution                             PASSED
+         test_idempotence                                    PASSED
+         test_missing_icon_fallback                          PASSED
+         test_duplicate_unknowns_use_single_generic_symbol   PASSED
+         test_use_attributes_present                         PASSED
+         test_basic_normalization                            PASSED
+         test_punctuation_and_spaces                         PASSED
+         test_strip_common_words                             PASSED
+         test_empty_or_none                                  PASSED
+         test_inject_removes_width_height_and_adds_viewbox   PASSED
+         test_has_visible_path_empty_false                   PASSED
+         test_inline_use_references_inlines_symbol           PASSED
+         test_normalize_removes_comments_and_timestamps      PASSED
+ARTIFACT_PATH: (console output only)
+NEXT_STATE: testing (continue)
+
+------------------------------------------------------------
+
+[2026-02-23T00:06:00Z]
+
+KIND: debug
+ID: BUG-ICON-CIRCLE-RENDER-01
+PLAN_ID: PLAN-BUG-ICON-CIRCLE-RENDER-01
+PHASE: testing
+ACTION: Ran JS unit test (node tests/unit/icon_registry.test.js)
+REASON: Client-side guard regression test required
+OUTCOME: PASS — 4 tests passed:
+         getAvailableIcons() returns 425 icons
+         getIconMarkup("postgres") returns markup
+         getIconMarkup("this-does-not-exist") returns fallback string
+         client-side guard prevents double-injection
+ARTIFACT_PATH: (console output only)
+NEXT_STATE: testing (continue)
+
+------------------------------------------------------------
+
+[2026-02-23T00:07:00Z]
+
+KIND: debug
+ID: BUG-ICON-CIRCLE-RENDER-01
+PLAN_ID: PLAN-BUG-ICON-CIRCLE-RENDER-01
+PHASE: testing
+ACTION: Ran Playwright headless e2e tests (npx playwright test tests/e2e/)
+REASON: Visual UI validation required per acceptance criteria
+OUTCOME: PASS — 63 tests passed, 0 failed
+         icon_matrix.spec.js:    50 tests — all passed (icon rendering matrix)
+         icon_presence.spec.js:   3 tests — all passed:
+           - reproduction fixed svg renders visibly
+           - BUG-ICON-CIRCLE-RENDER-01: server pipeline emits <use> with position attrs
+           - BUG-ICON-CIRCLE-RENDER-01: client guard prevents circle injection
+         story03_export_zoom.spec.js: 10 tests — all passed (no regression)
+ARTIFACT_PATH: .ai-sldc/debugging/BUG-ICON-CIRCLE-RENDER-01/evidence/ui/screenshots/
+NEXT_STATE: review
+
+------------------------------------------------------------

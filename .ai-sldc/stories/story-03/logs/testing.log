@@ -1,0 +1,72 @@
+[2026-02-23T04:54:00Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-VIEW-EXPORT-01
+PLAN_ID: PLAN-STORY-DIAGRAM-VIEW-EXPORT-01
+PHASE: testing
+ACTION: Ran Python unit tests (regression guard)
+REASON: All unit tests must pass before advancing to review. Python unit tests cover icon injection which must not regress.
+OUTCOME: 14 passed, 0 failed. All test_icon_injector.py, test_icon_normalize.py, test_icons.py, test_renderer_determinism.py pass.
+ARTIFACT_PATH: tests/unit/
+NEXT_STATE: testing
+
+------------------------------------------------------------
+
+[2026-02-23T04:54:10Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-VIEW-EXPORT-01
+PLAN_ID: PLAN-STORY-DIAGRAM-VIEW-EXPORT-01
+PHASE: testing
+ACTION: Ran Playwright unit tests — parseSvgDimensions + exportSvgToPng canvas dimensions
+REASON: Validates core SVG dimension parsing and canvas scale determinism in browser context.
+OUTCOME: 7 passed, 0 failed.
+  - parseSvgDimensions reads width/height attributes: PASS
+  - parseSvgDimensions falls back to viewBox: PASS
+  - parseSvgDimensions returns null for null input: PASS
+  - exportSvgToPng canvas at 2x (400→800, 200→400): PASS
+  - exportSvgToPng canvas at 1x (400→400, 200→200): PASS
+  - exportSvgToPng canvas at 3x (400→1200, 200→600): PASS
+  - Deterministic: two calls produce same dimensions: PASS
+ARTIFACT_PATH: tests/unit/test_png_export.spec.js
+NEXT_STATE: testing
+
+------------------------------------------------------------
+
+[2026-02-23T04:54:40Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-VIEW-EXPORT-01
+PLAN_ID: PLAN-STORY-DIAGRAM-VIEW-EXPORT-01
+PHASE: testing
+ACTION: Ran Playwright e2e tests — zoom controls and PNG export
+REASON: Acceptance criteria C mandates Playwright test: generates diagram, uses zoom controls, takes screenshots, exports PNG.
+OUTCOME: 10 passed, 0 failed. Full run in 6.0s.
+  - A: zoom controls bar renders all required buttons: PASS
+  - B: zoom-in increases zoom percentage: PASS
+  - C: zoom-out decreases zoom percentage: PASS
+  - D: reset returns to 100%: PASS
+  - E: fit-to-view adjusts zoom from zoomed state: PASS
+  - F: maximize toggle changes button icon: PASS
+  - G: zoom does not affect body/page zoom: PASS
+  - H: export scale selector defaults to 2x: PASS
+  - I: Download PNG at 2x produces 1600×600 PNG (32446 bytes): PASS
+  - J: deterministic export same dimensions on repeat: PASS
+ARTIFACT_PATH: .ai-sldc/stories/story-03/evidence/ui/
+NEXT_STATE: testing
+
+------------------------------------------------------------
+
+[2026-02-23T04:54:50Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-VIEW-EXPORT-01
+PLAN_ID: PLAN-STORY-DIAGRAM-VIEW-EXPORT-01
+PHASE: testing
+ACTION: Ran regression e2e test — icon_presence.spec.js
+REASON: Regression guard: existing icon injection must be unaffected by story-03 changes.
+OUTCOME: 1 passed, 0 failed. Icons (postgres, kafka, minio) still render correctly in fixed SVG.
+ARTIFACT_PATH: tests/e2e/icon_presence.spec.js
+NEXT_STATE: review
+
+------------------------------------------------------------

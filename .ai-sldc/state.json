@@ -10,5 +10,13 @@
     "phase": "completed",
     "timestamp": "2026-02-19T11:40:00Z",
     "plan_id": "PLAN-BUG-ICON-01"
+  },
+  {
+    "kind": "debug",
+    "id": "BUG-ICON-CIRCLE-RENDER-01",
+    "phase": "completed",
+    "branch": "feature/icons",
+    "confidence": 0.95,
+    "plan_id": "PLAN-BUG-ICON-CIRCLE-RENDER-01"
   }
 ]

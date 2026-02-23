@@ -62,3 +62,60 @@ def test_use_attributes_present():
     assert use_el is not None
     # check regular href
     assert use_el.attrib.get('href') == '#icon-postgres' or use_el.attrib.get('{http://www.w3.org/1999/xlink}href') == '#icon-postgres'
+
+
+# ---------------------------------------------------------------------------
+# BUG-BLUE-DOT regression guard tests
+# ---------------------------------------------------------------------------
+
+_BLUE_CIRCLE_PATH = "M12 2a10 10 0 100 20A10 10 0 0012 4z"
+
+
+def test_known_service_does_not_render_circle_path():
+    """BUG-BLUE-DOT: known brand icons must not embed the generic blue circle path."""
+    for token in ("kafka", "postgres"):
+        out = icon_injector.inject_icons(SAMPLE_SVG, {"node-1": token})
+        assert _BLUE_CIRCLE_PATH not in out, (
+            f"Generic blue circle path found in output for '{token}' icon — "
+            "brand SVG should not contain the circle fallback path"
+        )
+
+
+def test_unknown_service_fallback_is_not_blue_circle():
+    """BUG-BLUE-DOT: unknown services fall back to service-generic which must not contain the blue circle."""
+    out = icon_injector.inject_icons(SAMPLE_SVG, {"node-1": "completely-unknown-xyz-service"})
+    assert "icon-service-generic" in out, "Fallback symbol id not found in output"
+    assert _BLUE_CIRCLE_PATH not in out, (
+        "Blue circle path found in generic fallback SVG — "
+        "service-generic.svg must not embed the client-side blue circle path"
+    )
+
+
+def test_resolve_icon_key_covers_all_mapping_keys():
+    """BUG-BLUE-DOT: every MAPPING key must be self-resolvable, and _KEYWORDS must have ≥ 30 entries."""
+    from src.diagram.icon_injector import MAPPING, _KEYWORDS, resolve_icon_key
+
+    # At least 30 keyword entries must exist
+    assert len(_KEYWORDS) >= 30, (
+        f"Only {len(_KEYWORDS)} keywords defined — acceptance requires ≥ 30"
+    )
+
+    # Every MAPPING key is reachable: resolve_icon_key(key) should return that key
+    for key in MAPPING:
+        result = resolve_icon_key(key)
+        assert result == key, (
+            f"resolve_icon_key('{key}') returned {result!r}; "
+            f"a keyword entry for '{key}' must exist in _KEYWORDS"
+        )
+
+
+def test_inject_icons_idempotent_symbol_count():
+    """BUG-BLUE-DOT: injecting the same map twice must not duplicate symbols in the sprite."""
+    import re
+    mapping = {"node-1": "postgres", "node-2": "kafka"}
+    out1 = icon_injector.inject_icons(SAMPLE_SVG, mapping)
+    out2 = icon_injector.inject_icons(out1, mapping)
+    kafka_count = len(re.findall(r'symbol id="icon-kafka"', out2))
+    postgres_count = len(re.findall(r'symbol id="icon-postgres"', out2))
+    assert kafka_count == 1, f"icon-kafka symbol duplicated after second inject: found {kafka_count}"
+    assert postgres_count == 1, f"icon-postgres symbol duplicated after second inject: found {postgres_count}"

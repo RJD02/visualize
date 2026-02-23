@@ -3,9 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "cypress": "^12.0.0"
   },
   "scripts": {
-    "test:e2e": "cypress run --headless"
+    "test:e2e": "cypress run --headless",
+    "serve:test": "node scripts/serve_test.js"
+  },
+  "dependencies": {
+    "jsdom": "^28.1.0"
   }
 }

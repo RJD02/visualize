@@ -1,0 +1,39 @@
+[2026-02-23T00:00:00Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-COHESION-01
+PLAN_ID: PLAN-STORY-DIAGRAM-COHESION-01
+PHASE: planning
+ACTION: Created draft plan PLAN-STORY-DIAGRAM-COHESION-01.draft.md
+REASON: Entering planning phase per SDLC protocol; no src/tests modified.
+        Analyzed plantuml_renderer.py, diagram_agent.py, ir_enricher.py,
+        architect_agent.py, ArchitecturePlan model.
+        Initial draft proposed fix in plantuml_renderer.py (incorrect layer).
+OUTCOME: Initial draft written.
+NEXT_STATE: planning (revision)
+
+------------------------------------------------------------
+
+[2026-02-23T00:01:00Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-COHESION-01
+PLAN_ID: PLAN-STORY-DIAGRAM-COHESION-01
+PHASE: planning
+ACTION: Revised plan — moved fix from plantuml_renderer.py to ir_enricher.py
+REASON: PLAN_CHANGE — architectural correction identified during review.
+        Fixing connectivity at the renderer layer would require duplicating logic
+        for every renderer (PlantUML, Mermaid, etc.) and violates separation of
+        concerns. The ir_enricher.py already exists for this purpose but:
+          (a) diagram_agent.py never calls it
+          (b) it does not infer missing relationships
+        Correct fix: extend ir_enricher._IREnricher with _infer_missing_connections(),
+        wire enrich_ir() into diagram_agent.py before any renderer call.
+        All renderers then benefit automatically.
+OUTCOME: Plan revised. plantuml_renderer.py removed from change scope.
+         ir_enricher.py and diagram_agent.py are the only source files modified.
+NEXT_STATE: awaiting_approval
+
+------------------------------------------------------------
+
+------------------------------------------------------------

@@ -1,0 +1,90 @@
+[2026-02-23T00:10:00Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-VIEW-EXPORT-01
+PLAN_ID: PLAN-STORY-DIAGRAM-VIEW-EXPORT-01
+PHASE: approved
+ACTION: Locked plan to PLAN-STORY-DIAGRAM-VIEW-EXPORT-01.locked.json
+REASON: Human approval received. Draft checksum 443f5a7e verified. Plan locked with 5 tasks and allowed_scope of 5 files.
+OUTCOME: PLAN-STORY-DIAGRAM-VIEW-EXPORT-01.locked.json written to .ai-sldc/stories/story-03/plans/
+NEXT_STATE: execution
+
+------------------------------------------------------------
+
+[2026-02-23T00:11:00Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-VIEW-EXPORT-01
+PLAN_ID: PLAN-STORY-DIAGRAM-VIEW-EXPORT-01
+PHASE: approved
+ACTION: Created feature branch feature/story-03-export-zoom
+REASON: SDLC policy requires a dedicated feature branch per entity, created during APPROVED phase before execution begins.
+OUTCOME: git checkout -b feature/story-03-export-zoom succeeded. Working tree is now on the feature branch.
+NEXT_STATE: execution
+
+------------------------------------------------------------
+
+[2026-02-23T00:12:00Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-VIEW-EXPORT-01
+PLAN_ID: PLAN-STORY-DIAGRAM-VIEW-EXPORT-01
+PHASE: execution
+ACTION: Created ui/src/diagram/pngExport.js (T1)
+REASON: Isolated SVG→canvas export function needed for DiagramViewer to replace html2canvas dependency. Pure browser-native approach: Blob URL → HTMLImageElement → canvas.drawImage at exportScale.
+OUTCOME: pngExport.js created with exportSvgToPng() and parseSvgDimensions() exports. No external dependencies.
+NEXT_STATE: execution
+
+------------------------------------------------------------
+
+[2026-02-23T00:13:00Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-VIEW-EXPORT-01
+PLAN_ID: PLAN-STORY-DIAGRAM-VIEW-EXPORT-01
+PHASE: execution
+ACTION: Modified ui/src/diagram/DiagramViewer.jsx (T2)
+REASON: Added zoom state (zoom, panX, panY, maximized, exportScale), viewBox manipulation useEffect, zoom control bar UI (Zoom In/Out/Reset/Fit/Maximize), mouse wheel + drag-to-pan handlers, replaced html2canvas PNG export with exportSvgToPng, added data-cy attributes for Playwright assertions.
+OUTCOME: DiagramViewer.jsx fully updated. All acceptance criteria B controls implemented. PNG export now deterministic at 2x default scale.
+NEXT_STATE: execution
+
+------------------------------------------------------------
+
+[2026-02-23T00:14:00Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-VIEW-EXPORT-01
+PLAN_ID: PLAN-STORY-DIAGRAM-VIEW-EXPORT-01
+PHASE: execution
+ACTION: Created playwright.config.js (T5)
+REASON: No Playwright config existed at root. Config needed for correct test discovery, screenshot/video retention, and headless execution policy per agent.md.
+OUTCOME: playwright.config.js created with testDir=tests/e2e, screenshot=only-on-failure, video=retain-on-failure, trace=retain-on-failure, Chromium headless.
+NEXT_STATE: execution
+
+------------------------------------------------------------
+
+[2026-02-23T00:15:00Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-VIEW-EXPORT-01
+PLAN_ID: PLAN-STORY-DIAGRAM-VIEW-EXPORT-01
+PHASE: execution
+ACTION: Created tests/e2e/story03_export_zoom.spec.js (T3)
+REASON: Playwright e2e required by acceptance criteria C. Tests zoom controls interaction, PNG export, screenshot evidence collection, run-meta.json output.
+OUTCOME: story03_export_zoom.spec.js created covering: baseline screenshot, zoom-in interaction, fit-to-view, reset, PNG download verification, evidence storage.
+NEXT_STATE: execution
+
+------------------------------------------------------------
+
+[2026-02-23T00:16:00Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-VIEW-EXPORT-01
+PLAN_ID: PLAN-STORY-DIAGRAM-VIEW-EXPORT-01
+PHASE: execution
+ACTION: Created tests/unit/test_png_export.js (T4)
+REASON: Unit test coverage for SVG dimension parsing and canvas size determinism, runnable in Playwright browser context without requiring the application server.
+OUTCOME: test_png_export.js created with 4 test cases covering parseSvgDimensions variants and exportSvgToPng canvas dimension verification.
+NEXT_STATE: testing
+
+------------------------------------------------------------
