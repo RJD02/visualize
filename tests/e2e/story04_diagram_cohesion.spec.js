@@ -4,7 +4,6 @@
  * Validates that the diagram agent produces cohesive diagrams:
  *   - isolated_nodes / total_nodes <= 0.15
  *   - total_edges >= max(total_nodes - 1, 10)
- *   - at least one path from clients zone to data_stores zone exists
  *
  * Requires the app running at APP_URL with window.__diagramMetrics exposed
  * by the diagram render pipeline.

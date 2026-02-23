@@ -48,7 +48,7 @@ def _merge_inferred_edges(plan: ArchitecturePlan, enricher: _IREnricher) -> Arch
             Relationship.model_validate({
                 "from": from_label,
                 "to": to_label,
-                "type": "async",
+                "type": entry.get("rel_type", "async"),
                 "description": str(entry["reason"]),
             })
         )

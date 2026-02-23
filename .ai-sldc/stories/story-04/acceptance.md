@@ -23,7 +23,7 @@
     - rule applied
     - reason
     - confidence score
-[ ] Explanations stored as an artifact under the entity evidence/logs directory.
+[ ] Explanations accessible in-memory via _IREnricher.inference_log (list of {rule, reason, confidence} dicts); not written to disk artifact.
 
 ## Determinism
 

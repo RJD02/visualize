@@ -447,7 +447,8 @@ class _IREnricher:
             from_ids = {n["node_id"] for n in from_nodes}
             to_ids = {n["node_id"] for n in to_nodes}
             already = any(
-                e["from_id"] in from_ids and e["to_id"] in to_ids
+                (e["from_id"] in from_ids and e["to_id"] in to_ids)
+                or (e["from_id"] in to_ids and e["to_id"] in from_ids)
                 for e in self.edges + inferred
             )
             if already:
