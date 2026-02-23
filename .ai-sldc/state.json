@@ -1,13 +1,14 @@
-{
-  "kind": "feature",
-  "id": "story-02",
-  "phase": "completed"
-}
-
-{
-  "kind": "debug",
-  "bug_id": "BUG-ICON-01",
-  "phase": "completed",
-  "timestamp": "2026-02-19T11:40:00Z",
-  "plan_id": "PLAN-BUG-ICON-01"
-}
+[
+  {
+    "kind": "feature",
+    "id": "story-02",
+    "phase": "completed"
+  },
+  {
+    "kind": "debug",
+    "bug_id": "BUG-ICON-01",
+    "phase": "completed",
+    "timestamp": "2026-02-19T11:40:00Z",
+    "plan_id": "PLAN-BUG-ICON-01"
+  }
+]
