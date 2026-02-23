@@ -1,0 +1,45 @@
+[2026-02-23T00:00:00Z]
+
+KIND: debug
+ID: BUG-BLUE-DOT
+PLAN_ID: PLAN-BUG-BLUE-DOT-01
+PHASE: planning
+ACTION: Corrected intent.md (previously contained STORY-DIAGRAM-COHESION-01 content);
+        created draft plan PLAN-BUG-BLUE-DOT-01.draft.md.
+REASON: intent.md was incorrectly populated with story-04 content. Corrected to
+        accurately reflect the blue-dot icon rendering defect.
+        Analyzed icon_injector.py (server-side) and iconRegistry.js (client-side).
+        Identified generic circle fallback path as root cause.
+        Noted that commit ef3e544 claims to address the primary issue.
+OUTCOME: intent.md corrected. Draft plan written to plans/PLAN-BUG-BLUE-DOT-01.draft.md.
+         Plan covers fix verification + 4 unit test additions + Cypress regression spec.
+NEXT_STATE: awaiting_approval
+
+------------------------------------------------------------
+[2026-02-23T08:00:00Z]
+
+KIND: debug
+ID: BUG-BLUE-DOT
+PLAN_ID: PLAN-BUG-BLUE-DOT-01
+PHASE: execution
+ACTION: Completed source patch and regression tests.
+        1. Patched src/diagram/icon_injector.py:
+           - Added _KEYWORDS list (54 entries covering 30+ services)
+           - Added resolve_icon_key(label) for case-insensitive label→key resolution
+           - inject_icons() now uses resolve_icon_key() before MAPPING lookup
+           - <use> elements now carry x, y, width, height from parent <rect>
+           - class changed from 'injected-icon' to 'node-icon'
+           - Pre-populates used_symbol_ids from existing sprite (idempotence fix)
+        2. Created ui/icons/airflow.svg and ui/icons/kubernetes.svg brand stubs
+        3. Extended tests/unit/test_icon_injector.py with 4 BUG-BLUE-DOT tests:
+           - test_known_service_does_not_render_circle_path
+           - test_unknown_service_fallback_is_not_blue_circle
+           - test_resolve_icon_key_covers_all_mapping_keys
+           - test_inject_icons_idempotent_symbol_count
+        4. Created cypress/fixtures/diagram_kafka.html
+        5. Created cypress/e2e/bug_blue_dot_regression.cy.js (8 tests)
+OUTCOME: 22 Python unit tests pass (0 failures). Cypress spec ready.
+         ef3e544 tests (test_icon_injection_visibility.py) now all pass.
+NEXT_STATE: completed
+
+------------------------------------------------------------
