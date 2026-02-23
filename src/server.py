@@ -68,6 +68,73 @@ import src.animation.diagram_renderer as renderer_module
 import json
 from src import architecture_quality_agent as architecture_quality_agent
 from src.icons.inject import inline_use_references
+from src.diagram.icon_injector import inject_icons, resolve_icon_key
+
+
+def _auto_inject_icons(svg_text: str) -> str:
+    """Scan SVG for node groups with recognizable labels and inject brand icons.
+
+    Supports two SVG renderer formats:
+    - Internal renderer: <g data-kind="node"> with SVG <text> children.
+    - Mermaid/flowchart renderer: <g class="node ..."> with <foreignObject>
+      HTML children (div/span/p) containing the label text.
+    Uses keyword-based resolve_icon_key() to match labels like
+    "Kafka/Streaming Pool" or "MinIO/Ceph storage cluster".
+    """
+    try:
+        from xml.etree import ElementTree as ET
+
+        root = ET.fromstring(svg_text)
+        node_service_map: dict = {}
+
+        def _strip_ns(tag: str) -> str:
+            return tag.split("}")[-1] if "}" in tag else tag
+
+        # --- Pass 1: internal SVG renderer (data-kind="node") ---
+        for el in root.iter():
+            if el.attrib.get("data-kind") != "node":
+                continue
+            nid = el.attrib.get("id") or el.attrib.get("data-block-id")
+            if not nid:
+                continue
+            parts = []
+            for child in el.iter():
+                if _strip_ns(child.tag) == "text":
+                    t = (child.text or "").strip()
+                    if t:
+                        parts.append(t)
+            label = " ".join(parts).strip()
+            if label and resolve_icon_key(label):
+                node_service_map[nid] = label
+
+        # --- Pass 2: Mermaid/flowchart renderer (class="node ...") ---
+        # Mermaid uses <foreignObject> with HTML (div/span/p) for node labels,
+        # so SVG <text> queries find nothing. Scan the HTML children instead.
+        if not node_service_map:
+            for el in root.iter():
+                if _strip_ns(el.tag) != "g":
+                    continue
+                eid = el.attrib.get("id", "")
+                cls = el.attrib.get("class", "")
+                # Must have an id and belong to a node class (e.g. "node default")
+                if not eid or "node" not in cls.split():
+                    continue
+                parts = []
+                for child in el.iter():
+                    if _strip_ns(child.tag) in ("div", "span", "p"):
+                        t = (child.text or "").strip()
+                        if t:
+                            parts.append(t)
+                label = " ".join(parts).strip()
+                if label and resolve_icon_key(label):
+                    node_service_map[eid] = label
+
+        if node_service_map:
+            svg_text = inject_icons(svg_text, node_service_map)
+    except Exception:
+        pass
+    return svg_text
+
 
 app = FastAPI(title="Architecture Visualization API")
 
@@ -702,15 +769,12 @@ def render_diagram_api(payload: dict, db: DbSession = Depends(get_db)):
     if mode == 'static':
         if enhanced:
             svg_text = render_svg(svg_text, animated=False, enhanced=True, semantic_intent=semantic_intent)
-        # Only attempt to inline when the SVG contains <use> or symbol references
-        txt_lower = (svg_text or '').lower()
-        try:
-            if ('<use' in txt_lower) or ('xlink:href' in txt_lower) or ('<symbol' in txt_lower):
-                # avoid re-inlining if already inlined
-                if 'data-inlined-from' not in txt_lower:
-                    svg_text = inline_use_references(svg_text)
-        except Exception:
-            pass
+        # Inject brand icons into recognized node groups.
+        # <use>→<symbol> references are left intact; browsers resolve them natively
+        # for inline SVG. Calling inline_use_references() was dropping the x/y/width/height
+        # position attributes from <use> elements, making brand icons render at wrong
+        # position and scale (BUG-ICON-CIRCLE-RENDER-01).
+        svg_text = _auto_inject_icons(svg_text)
         return JSONResponse(content={'svg': svg_text})
 
     # animated mode
@@ -811,14 +875,12 @@ def render_diagram_svg(
     elif enhanced:
         svg_text = render_svg(svg_text, animated=False, debug=debug, enhanced=True, semantic_intent=semantic_intent)
 
-    # Only inline when necessary as above
-    try:
-        txt_lower = (svg_text or '').lower()
-        if ('<use' in txt_lower) or ('xlink:href' in txt_lower) or ('<symbol' in txt_lower):
-            if 'data-inlined-from' not in txt_lower:
-                svg_text = inline_use_references(svg_text)
-    except Exception:
-        pass
+    # Inject brand icons into recognized node groups.
+    # <use>→<symbol> references are left intact; browsers resolve them natively
+    # for inline SVG. Calling inline_use_references() was dropping the x/y/width/height
+    # position attributes from <use> elements, making brand icons render at wrong
+    # position and scale (BUG-ICON-CIRCLE-RENDER-01).
+    svg_text = _auto_inject_icons(svg_text)
 
     return JSONResponse(content={"svg": svg_text})
 

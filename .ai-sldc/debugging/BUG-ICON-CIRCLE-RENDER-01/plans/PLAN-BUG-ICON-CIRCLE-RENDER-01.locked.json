@@ -1,0 +1,44 @@
+{
+  "plan_id": "PLAN-BUG-ICON-CIRCLE-RENDER-01",
+  "kind": "debug",
+  "entity_id": "BUG-ICON-CIRCLE-RENDER-01",
+  "allowed_scope": [
+    "src/server.py",
+    "ui/src/diagram/iconRegistry.js",
+    "tests/unit/test_icon_injection_visibility.py",
+    "tests/unit/icon_registry.test.js",
+    "tests/e2e/icon_presence.spec.js",
+    ".ai-sldc/debugging/BUG-ICON-CIRCLE-RENDER-01/**"
+  ],
+  "tasks": [
+    {
+      "id": "T1",
+      "description": "Remove inline_use_references() calls from src/server.py render pipeline",
+      "files": ["src/server.py"]
+    },
+    {
+      "id": "T2",
+      "description": "Add data-icon-injected guard in postProcessSvgWithIcons() in iconRegistry.js",
+      "files": ["ui/src/diagram/iconRegistry.js"]
+    },
+    {
+      "id": "T3",
+      "description": "Add/update unit tests for brand icon injection and guard behavior",
+      "files": ["tests/unit/test_icon_injection_visibility.py", "tests/unit/icon_registry.test.js"]
+    },
+    {
+      "id": "T4",
+      "description": "Add/update Playwright e2e test for icon rendering",
+      "files": ["tests/e2e/icon_presence.spec.js"]
+    }
+  ],
+  "constraints": [
+    "Do not modify src/icons/inject.py (keep for potential future use)",
+    "Do not change icon resolution logic in icon_injector.py",
+    "Do not modify App.jsx ENABLE_SVG_ICON_INJECTION flag",
+    "Do not break existing diagram rendering",
+    "Fix must be deterministic and offline"
+  ],
+  "acceptance_summary": "Icons render as actual brand SVG logos not blue circles. Server SVG has <symbol>+<use> with position attributes. Client does not double-inject. All tests pass. Confidence >= 0.85.",
+  "draft_checksum": "sha256:plan-bug-icon-circle-render-01-v1"
+}

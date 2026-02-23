@@ -1,8 +1,8 @@
 {
-  "kind": "feature",
-  "id": "STORY-DIAGRAM-VIEW-EXPORT-01",
-  "phase": "pr_review",
-  "branch": "feature/story-03-export-zoom",
-  "confidence": 0.98,
-  "plan_id": "PLAN-STORY-DIAGRAM-VIEW-EXPORT-01"
+  "kind": "debug",
+  "id": "BUG-ICON-CIRCLE-RENDER-01",
+  "phase": "completed",
+  "branch": "feature/icons",
+  "confidence": 0.95,
+  "plan_id": "PLAN-BUG-ICON-CIRCLE-RENDER-01"
 }

@@ -25,15 +25,18 @@ function normalizeLabel(label) {
 }
 
 const KEYWORDS = {
-    postgres: ['postgres', 'postgresql', 'metadata db', 'metadatadb'],
-    kafka: ['kafka', 'kafka topics', 'kafka/cdc', 'kafka/cdc'],
-    minio: ['minio', 'object store', 'objectstore'],
-    spark: ['spark', 'spark etl', 'spark pool'],
-    trino: ['trino', 'presto', 'trino sql'],
-    vault: ['vault', 'secrets'],
-    kubernetes: ['kubernetes', 'k8s', 'kubernetes cluster'],
-    airflow: ['airflow', 'orchestration'],
-    superset: ['superset', 'bi', 'superset/bi']
+    postgres:      ['postgres', 'postgresql', 'metadata db', 'metadatadb'],
+    kafka:         ['kafka'],
+    minio:         ['minio', 'object store', 'objectstore', 'ceph', 's3'],
+    spark:         ['spark'],
+    trino:         ['trino', 'presto'],
+    vault:         ['vault', 'secrets'],
+    kubernetes:    ['kubernetes', 'k8s'],
+    airflow:       ['airflow'],
+    superset:      ['superset'],
+    redis:         ['redis', 'cache'],
+    mongodb:       ['mongodb', 'mongo'],
+    druid:         ['druid'],
 };
 
 export function resolveIconForNode(label, stereotype) {
@@ -53,13 +56,19 @@ export function resolveIconForNode(label, stereotype) {
     return null;
 }
 
-// Auto-assign icons by scanning text nodes inside provided SVG element
+// Auto-assign icons by scanning text/foreignObject nodes inside provided SVG element.
+// Handles both internal renderer (<text>) and Mermaid (<foreignObject> with HTML).
 function autoAssignIconsFromSvg(svg) {
     const requests = [];
+    const seen = new Set();
+    // SVG <text> elements (internal renderer)
     const texts = Array.from(svg.querySelectorAll('text'));
-    for (const t of texts) {
+    // Mermaid foreignObject HTML children — querySelectorAll works across namespaces
+    const foTexts = Array.from(svg.querySelectorAll('foreignObject p, foreignObject span, foreignObject div'));
+    for (const t of [...texts, ...foTexts]) {
         const text = (t.textContent || '').trim();
-        if (!text) continue;
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
         const icon = resolveIconForNode(text, null);
         if (icon) requests.push({ nodeText: text, iconKey: icon });
     }
@@ -107,68 +116,88 @@ export function postProcessSvgWithIcons(svgString) {
             return new XMLSerializer().serializeToString(doc);
         }
 
-        // Add a simple style for node icons. Icons inherit color via `currentColor` so they follow node color.
+        // Icon style — use explicit dark-blue fill for contrast on light node backgrounds.
+        // Brand SVGs injected server-side carry their own colours; this style covers the
+        // client-side simple-path fallback icons.
         let styleEl = svg.querySelector('style#fa_node_icon_style');
         if (!styleEl) {
             styleEl = doc.createElementNS('http://www.w3.org/2000/svg', 'style');
             styleEl.setAttribute('id', 'fa_node_icon_style');
-            styleEl.textContent = '.node-icon { fill: currentColor; opacity: 1; transition: opacity 200ms; pointer-events: none; } .node-icon.hidden{opacity:0}';
+            styleEl.textContent = '.node-icon { fill: #1e40af; opacity: 0.88; transition: opacity 200ms; pointer-events: none; } .node-icon.hidden{opacity:0}';
             svg.insertBefore(styleEl, svg.firstChild);
         }
 
         // Ensure svg root has xlink namespace for older renderers when using xlink:href
         if (!svg.getAttribute('xmlns:xlink')) svg.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
 
-        // For each request, find a group (<g>) that contains a text node with the requested text
+        // For each request, find the node group that contains the matching label text.
+        // Supports both <text> elements (internal renderer) and <foreignObject> HTML
+        // children like <p>/<span> (Mermaid renderer).
         let inserted = 0;
         requests.forEach((req) => {
             const nodeText = (req.nodeText || '').trim();
             const iconKey = req.iconKey;
             if (!nodeText || !ICONS[iconKey]) return;
-            // Find text element matching nodeText
-            const texts = Array.from(svg.querySelectorAll('text'));
+
+            // Search SVG text elements + Mermaid foreignObject HTML children
+            const candidates = [
+                ...Array.from(svg.querySelectorAll('text')),
+                ...Array.from(svg.querySelectorAll('foreignObject p, foreignObject span, foreignObject div')),
+            ];
             let targetGroup = null;
-            for (const t of texts) {
-                if (t.textContent && t.textContent.trim().toLowerCase() === nodeText.toLowerCase()) {
-                    // walk up to group
-                    let g = t;
-                    while (g && g.nodeName.toLowerCase() !== 'g') g = g.parentNode;
-                    if (g) { targetGroup = g; break; }
+            for (const t of candidates) {
+                if (!t.textContent || t.textContent.trim().toLowerCase() !== nodeText.toLowerCase()) continue;
+                // Walk up to the nearest <g> ancestor.  For Mermaid nodes the innermost
+                // <g class="label"> does not have a <rect>; keep walking until we find one
+                // that does, or until we reach a <g class="node ..."> (outermost node group).
+                let g = t.parentNode;
+                while (g && g.nodeName.toLowerCase() !== 'svg') {
+                    if (g.nodeName.toLowerCase() === 'g') {
+                        const cls = g.getAttribute('class') || '';
+                        // Stop at the outermost node group or when we have a rect sibling
+                        if (cls.split(' ').includes('node') || g.querySelector(':scope > rect')) break;
+                    }
+                    g = g.parentNode;
                 }
+                if (g && g.nodeName.toLowerCase() === 'g') { targetGroup = g; break; }
             }
             if (!targetGroup) return;
 
-            // Create a <use> referencing the symbol and prepend it to the group
+            // Skip groups where server-side brand icon was already injected
+            // (data-icon-injected="1" is set by src/diagram/icon_injector.py).
+            // This prevents client-side circle-path placeholders from overriding
+            // the real brand SVG symbols injected server-side (BUG-ICON-CIRCLE-RENDER-01).
+            if (targetGroup.getAttribute('data-icon-injected') === '1') return;
+
+            // Create a <use> referencing the symbol
             const use = doc.createElementNS('http://www.w3.org/2000/svg', 'use');
-            // set both SVG2 `href` and legacy `xlink:href` to maximize compatibility
             use.setAttribute('href', '#fa_icon_' + iconKey);
             use.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#fa_icon_' + iconKey);
             use.setAttribute('class', 'node-icon');
 
-            // Try to position the icon relative to a rect inside the group (preferred). If no rect,
-            // position relative to the first text element.
+            // Position relative to the background <rect> (works for both internal-renderer
+            // and Mermaid nodes where the rect is centred at group origin with negative x/y).
             const rect = targetGroup.querySelector('rect');
             const textEl = targetGroup.querySelector('text');
-            const DEFAULT_ICON_PX = 16;
-            let tx = 0;
-            let ty = 0;
-            let scale = DEFAULT_ICON_PX / 24; // icons authored for 24px viewBox
+            const ICON_SIZE = 20;
+            let tx = 0, ty = 0;
             if (rect) {
                 const rx = parseFloat(rect.getAttribute('x') || '0');
                 const ry = parseFloat(rect.getAttribute('y') || '0');
-                const rh = parseFloat(rect.getAttribute('height') || '16');
-                // place icon 8px from left edge and vertically centered
-                tx = rx + 8;
-                ty = ry + (rh / 2) - (DEFAULT_ICON_PX / 2);
+                const rh = parseFloat(rect.getAttribute('height') || String(ICON_SIZE));
+                tx = rx + 4;
+                ty = ry + (rh - ICON_SIZE) / 2;
             } else if (textEl) {
                 const txAttr = parseFloat(textEl.getAttribute('x') || '0');
                 const tyAttr = parseFloat(textEl.getAttribute('y') || '0');
-                tx = txAttr - 20; // place left of text
-                ty = tyAttr - (DEFAULT_ICON_PX / 2);
+                tx = txAttr - ICON_SIZE - 4;
+                ty = tyAttr - ICON_SIZE / 2;
             }
 
-            // set transform for placement + scaling
-            use.setAttribute('transform', `translate(${tx},${ty}) scale(${scale})`);
+            use.setAttribute('x', String(tx));
+            use.setAttribute('y', String(ty));
+            use.setAttribute('width', String(ICON_SIZE));
+            use.setAttribute('height', String(ICON_SIZE));
             targetGroup.insertBefore(use, targetGroup.firstChild);
             inserted += 1;
         });
