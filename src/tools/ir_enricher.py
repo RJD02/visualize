@@ -92,6 +92,40 @@ ALLOWED_MOODS = {"minimal", "vibrant", "formal", "playful"}
 ALLOWED_DENSITY = {"compact", "balanced", "spacious"}
 
 DEFAULT_ZONE_ORDER = ["clients", "edge", "core_services", "external_services", "data_stores"]
+
+# Zone pairs that should be connected when no explicit edge bridges them (Rule 1).
+_ZONE_CASCADE_PAIRS: List[Tuple[str, str]] = [
+    ("clients", "edge"),
+    ("edge", "core_services"),
+    ("core_services", "data_stores"),
+    ("external_services", "core_services"),
+]
+
+# (from_keyword, to_keyword, rel_type, reason, confidence) — Rule 2 tech-dependency patterns.
+# Labels are lowercased before matching.  First match per pair wins.
+_TECH_DEPS: List[Tuple[str, str, str, str, float]] = [
+    ("kafka",      "consumer",   "async", "kafka feeds consumer",            0.7),
+    ("kafka",      "processor",  "async", "kafka feeds processor",           0.7),
+    ("kafka",      "worker",     "async", "kafka feeds worker",              0.7),
+    ("streaming",  "consumer",   "async", "streaming feeds consumer",        0.7),
+    ("streaming",  "processor",  "async", "streaming feeds processor",       0.7),
+    ("producer",   "kafka",      "async", "producer publishes to kafka",     0.7),
+    ("producer",   "streaming",  "async", "producer publishes to streaming", 0.7),
+    ("prometheus", "grafana",    "data",  "prometheus scrapes to grafana",   0.7),
+    ("metrics",    "grafana",    "data",  "metrics flow to grafana",         0.7),
+    ("airflow",    "spark",      "async", "airflow orchestrates spark",      0.7),
+    ("scheduler",  "spark",      "async", "scheduler triggers spark",        0.7),
+    ("scheduler",  "worker",     "async", "scheduler dispatches to worker",  0.7),
+    ("ingress",    "service",    "sync",  "ingress routes to service",       0.7),
+    ("gateway",    "service",    "sync",  "gateway routes to service",       0.7),
+    ("service",    "postgres",   "data",  "service reads/writes postgres",   0.7),
+    ("service",    "mysql",      "data",  "service reads/writes mysql",      0.7),
+    ("service",    "mongo",      "data",  "service reads/writes mongo",      0.7),
+    ("service",    "redis",      "data",  "service uses redis cache",        0.7),
+    ("primary",    "replica",    "data",  "primary replicates to replica",   0.7),
+    ("primary",    "secondary",  "data",  "primary replicates to secondary", 0.7),
+    ("dc",         "dr",         "data",  "dc replicates to dr site",        0.7),
+]
 LAYOUT_MAP = {
     "left-to-right": "left-right",
     "left_right": "left-right",
@@ -148,11 +182,14 @@ class _IREnricher:
         self.edges: List[Dict[str, object]] = []
         self.validation_messages: List[Dict[str, str]] = []
         self.node_lookup: Dict[str, Dict[str, object]] = {}
+        # Records of inferred edges for explainability (not in enriched output — schema compliant)
+        self.inference_log: List[Dict[str, object]] = []
 
     def build(self) -> Dict[str, object]:
         self._populate_nodes()
         self._populate_relationship_nodes()
         self._populate_edges()
+        self._infer_missing_connections()
         self._sort_nodes()
         return {
             "diagram_type": self.diagram_type,
@@ -365,6 +402,196 @@ class _IREnricher:
         if node:
             return node
         return self._add_node(label, None, inferred=True)
+
+    def _infer_missing_connections(self) -> None:
+        """Infer missing edges to improve diagram connectivity (deterministic, no randomness).
+
+        Rule 1 — Zone cascade: for each adjacent zone pair in _ZONE_CASCADE_PAIRS, if no
+            existing edge bridges them, add one weak dashed edge (confidence=0.5).
+        Rule 2 — Tech-dependency: known keyword pairs infer typed edges (confidence=0.7).
+        Rule 3 — Completion guard: any node still at degree 0 gets one weak edge (confidence=0.3).
+
+        All sorting uses sorted(..., key=str.lower) for determinism.
+        Metadata (rule/reason/confidence) is stored in self.inference_log, not on the edge
+        dict, to remain schema-compliant (Edge schema has additionalProperties=false).
+        """
+        if not self.nodes:
+            return
+
+        # Degree index (inbound + outbound)
+        degree: Dict[str, int] = {n["node_id"]: 0 for n in self.nodes}
+        for edge in self.edges:
+            degree[edge["from_id"]] = degree.get(edge["from_id"], 0) + 1
+            degree[edge["to_id"]] = degree.get(edge["to_id"], 0) + 1
+
+        # Zone → sorted node list
+        zone_nodes: Dict[str, List[Dict[str, object]]] = {}
+        for zone in self.zone_order:
+            zone_nodes[zone] = sorted(
+                [n for n in self.nodes if n.get("zone") == zone],
+                key=lambda n: n["label"].lower(),
+            )
+
+        # Existing from_id→to_id pairs for deduplication
+        existing_pairs: set[tuple[str, str]] = {
+            (e["from_id"], e["to_id"]) for e in self.edges
+        }
+        inferred: List[Dict[str, object]] = []
+
+        # ── Rule 1: Zone-layer cascade ──────────────────────────────────────
+        for from_zone, to_zone in _ZONE_CASCADE_PAIRS:
+            from_nodes = zone_nodes.get(from_zone, [])
+            to_nodes = zone_nodes.get(to_zone, [])
+            if not from_nodes or not to_nodes:
+                continue
+            from_ids = {n["node_id"] for n in from_nodes}
+            to_ids = {n["node_id"] for n in to_nodes}
+            already = any(
+                (e["from_id"] in from_ids and e["to_id"] in to_ids)
+                or (e["from_id"] in to_ids and e["to_id"] in from_ids)
+                for e in self.edges + inferred
+            )
+            if already:
+                continue
+            from_node = from_nodes[0]
+            to_node = to_nodes[0]
+            pair = (from_node["node_id"], to_node["node_id"])
+            if pair not in existing_pairs:
+                edge = self._make_inferred_edge(
+                    from_node, to_node,
+                    rel_type="async",
+                    rule="zone_cascade",
+                    reason=f"zone layer cascade: {from_zone} → {to_zone}",
+                    confidence=0.5,
+                )
+                inferred.append(edge)
+                existing_pairs.add(pair)
+                degree[from_node["node_id"]] = degree.get(from_node["node_id"], 0) + 1
+                degree[to_node["node_id"]] = degree.get(to_node["node_id"], 0) + 1
+
+        # ── Rule 2: Tech-dependency keywords ────────────────────────────────
+        sorted_nodes = sorted(self.nodes, key=lambda n: n["label"].lower())
+        for i, node_a in enumerate(sorted_nodes):
+            la = node_a["label"].lower()
+            for node_b in sorted_nodes[i + 1:]:
+                lb = node_b["label"].lower()
+                matched = False
+                for from_kw, to_kw, rel_type, reason, confidence in _TECH_DEPS:
+                    if matched:
+                        break
+                    if from_kw in la and to_kw in lb:
+                        pair = (node_a["node_id"], node_b["node_id"])
+                        if pair not in existing_pairs:
+                            edge = self._make_inferred_edge(
+                                node_a, node_b,
+                                rel_type=rel_type, rule="tech_dependency",
+                                reason=reason, confidence=confidence,
+                            )
+                            inferred.append(edge)
+                            existing_pairs.add(pair)
+                            degree[node_a["node_id"]] = degree.get(node_a["node_id"], 0) + 1
+                            degree[node_b["node_id"]] = degree.get(node_b["node_id"], 0) + 1
+                        matched = True
+                        continue
+                    if from_kw in lb and to_kw in la:
+                        pair = (node_b["node_id"], node_a["node_id"])
+                        if pair not in existing_pairs:
+                            edge = self._make_inferred_edge(
+                                node_b, node_a,
+                                rel_type=rel_type, rule="tech_dependency",
+                                reason=reason + " (reversed)", confidence=confidence,
+                            )
+                            inferred.append(edge)
+                            existing_pairs.add(pair)
+                            degree[node_b["node_id"]] = degree.get(node_b["node_id"], 0) + 1
+                            degree[node_a["node_id"]] = degree.get(node_a["node_id"], 0) + 1
+                        matched = True
+
+        # ── Rule 3: Completion guard ─────────────────────────────────────────
+        for node in sorted_nodes:
+            if degree.get(node["node_id"], 0) > 0:
+                continue
+            zone = node.get("zone")
+            anchor: Optional[Dict[str, object]] = None
+            # Prefer a connected node in the same zone
+            for candidate in zone_nodes.get(zone, []):
+                if candidate["node_id"] != node["node_id"] and degree.get(candidate["node_id"], 0) > 0:
+                    anchor = candidate
+                    break
+            # Fall back to any connected node globally
+            if anchor is None:
+                for candidate in sorted_nodes:
+                    if candidate["node_id"] != node["node_id"] and degree.get(candidate["node_id"], 0) > 0:
+                        anchor = candidate
+                        break
+            # Last resort: connect to any other node even if it too has degree 0
+            if anchor is None:
+                for candidate in sorted_nodes:
+                    if candidate["node_id"] != node["node_id"]:
+                        anchor = candidate
+                        break
+            if anchor is None:
+                continue
+            pair = (anchor["node_id"], node["node_id"])
+            if pair not in existing_pairs:
+                edge = self._make_inferred_edge(
+                    anchor, node,
+                    rel_type="async",
+                    rule="completion_guard",
+                    reason=f"completion guard: '{node['label']}' had no edges",
+                    confidence=0.3,
+                )
+                inferred.append(edge)
+                existing_pairs.add(pair)
+                degree[anchor["node_id"]] = degree.get(anchor["node_id"], 0) + 1
+                degree[node["node_id"]] = degree.get(node["node_id"], 0) + 1
+
+        self.edges.extend(inferred)
+
+    def _make_inferred_edge(
+        self,
+        from_node: Dict[str, object],
+        to_node: Dict[str, object],
+        rel_type: str,
+        rule: str,
+        reason: str,
+        confidence: float,
+    ) -> Dict[str, object]:
+        """Build a schema-compliant inferred edge and record to self.inference_log."""
+        edge_id = _unique_identifier(
+            f"{from_node['node_id']}__{to_node['node_id']}__inferred",
+            self.edge_ids,
+            prefix="edge",
+        )
+        color = self.palette[1 % len(self.palette)]
+        text_style: Dict[str, object] = {
+            "fontSize": 11,
+            "fontFamily": FONT_FAMILY,
+            "textColor": color,
+        }
+        self.inference_log.append({
+            "edge_id": edge_id,
+            "from_id": from_node["node_id"],
+            "to_id": to_node["node_id"],
+            "rule": rule,
+            "reason": reason,
+            "confidence": confidence,
+        })
+        return {
+            "edge_id": edge_id,
+            "from_id": from_node["node_id"],
+            "to_id": to_node["node_id"],
+            "rel_type": rel_type,
+            "label": reason,
+            "style": "dashed",
+            "color": color,
+            "width": 1,
+            "arrowhead": "open",
+            "text_style": text_style,
+            "curvature": 0.0,
+            "confidence": confidence,
+            "reason": reason,
+        }
 
     def _sort_nodes(self) -> None:
         zone_rank = {zone: idx for idx, zone in enumerate(self.zone_order)}

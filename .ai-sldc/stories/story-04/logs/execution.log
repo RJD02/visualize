@@ -1,0 +1,34 @@
+[2026-02-23T09:00:00Z]
+
+KIND: feature
+ID: STORY-DIAGRAM-COHESION-01
+PLAN_ID: PLAN-STORY-DIAGRAM-COHESION-01
+PHASE: execution
+ACTION: Implemented IR connectivity inference and wired into diagram_agent.
+
+Files modified:
+  src/tools/ir_enricher.py:
+    - Added _ZONE_CASCADE_PAIRS (4 zone-to-zone pairs)
+    - Added _TECH_DEPS (21 keyword pairs covering kafka, prometheus, airflow, etc.)
+    - Added _IREnricher.inference_log: List[Dict] (explainability records, schema-safe)
+    - Added _IREnricher._infer_missing_connections() — Rule 1 zone cascade,
+      Rule 2 tech-dependency, Rule 3 completion guard (all using sorted() for determinism)
+    - Added _IREnricher._make_inferred_edge() helper
+    - build() now calls _infer_missing_connections() after _populate_edges()
+
+  src/agents/diagram_agent.py:
+    - Import _IREnricher from ir_enricher
+    - Added _merge_inferred_edges(plan, enricher) — maps node_id→label and
+      creates Relationship objects from inference_log
+    - _run_async_impl() now runs enricher before generate_plantuml_from_plan()
+
+Files created:
+  tests/unit/test_connectivity_inferencer.py — 8 unit tests (all pass)
+  tests/e2e/story04_diagram_cohesion.spec.js — Playwright E2E (skip-safe)
+  .ai-sldc/stories/story-04/ — SDLC artifacts
+
+OUTCOME: 8/8 unit tests pass. 3/3 existing ir_enricher tests unaffected.
+         Schema validation passes with inferred edges. Determinism verified.
+NEXT_STATE: completed
+
+------------------------------------------------------------
