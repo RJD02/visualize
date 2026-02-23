@@ -1,0 +1,26 @@
+{
+  "plan_id": "PLAN-BUG-BLUE-DOT-01",
+  "kind": "debug",
+  "entity_id": "BUG-BLUE-DOT",
+  "locked_at": "2026-02-23T07:25:01Z",
+  "allowed_scope": [
+    "tests/unit/test_icon_injector.py",
+    "cypress/e2e/bug_blue_dot_regression.cy.js",
+    "cypress/fixtures/diagram_kafka.html",
+    ".ai-sldc/debugging/BUG-BLUE-DOT/"
+  ],
+  "tasks": [
+    "Verify ef3e544 fix is complete (server-side icon injection uses real brand SVGs)",
+    "Extend tests/unit/test_icon_injector.py with 4 regression tests",
+    "Create cypress/fixtures/diagram_kafka.html fixture",
+    "Create cypress/e2e/bug_blue_dot_regression.cy.js regression spec",
+    "Patch source if ef3e544 is incomplete (conditional)"
+  ],
+  "constraints": [
+    "No CDN dependencies in tests",
+    "Fixtures use local SVG content only",
+    "Must not break existing icon injection"
+  ],
+  "acceptance_summary": "Known services render non-circle icons; unknown services do not show blue circle; resolve_icon_key covers all 30+ keywords; inject_icons is idempotent",
+  "draft_checksum": "1cfb15f42b711624"
+}

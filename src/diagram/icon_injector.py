@@ -8,7 +8,7 @@ document-level <defs id="icon-sprite"> with <symbol> children, and injects
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 from xml.etree import ElementTree as ET
 
 BASE_ICON_DIR = Path("ui/icons")
@@ -19,7 +19,93 @@ MAPPING = {
     "minio": "minio.svg",
     "database": "database.svg",
     "cache": "cache.svg",
+    "redis": "redis.svg",
+    "airflow": "airflow.svg",
+    "kubernetes": "kubernetes.svg",
+    "grafana": "grafana.svg",
+    "prometheus": "prometheus.svg",
+    "spark": "spark.svg",
+    "mysql": "mysql.svg",
+    "mongodb": "mongodb.svg",
+    "elasticsearch": "elasticsearch.svg",
+    "nginx": "nginx.svg",
+    "rabbitmq": "rabbitmq.svg",
+    "docker": "docker.svg",
+    "aws": "aws.svg",
+    "gcp": "gcp.svg",
+    "azure": "azure.svg",
 }
+
+# Keyword → MAPPING key.  Checked in order; first substring match wins.
+# Labels are lowercased before matching.
+_KEYWORDS: list[tuple[str, str]] = [
+    ("postgres", "postgres"),
+    ("postgresql", "postgres"),
+    ("kafka", "kafka"),
+    ("kinesis", "kafka"),
+    ("event hub", "kafka"),
+    ("pubsub", "kafka"),
+    ("streaming", "kafka"),
+    ("redis", "redis"),
+    ("valkey", "redis"),
+    ("minio", "minio"),
+    ("object stor", "minio"),
+    ("airflow", "airflow"),
+    ("superset", "airflow"),
+    ("openmetadata", "airflow"),
+    ("prefect", "airflow"),
+    ("dagster", "airflow"),
+    ("kubernetes", "kubernetes"),
+    ("k8s", "kubernetes"),
+    ("kube", "kubernetes"),
+    ("eks", "kubernetes"),
+    ("gke", "kubernetes"),
+    ("aks", "kubernetes"),
+    ("grafana", "grafana"),
+    ("prometheus", "prometheus"),
+    ("alertmanager", "prometheus"),
+    ("spark", "spark"),
+    ("databricks", "spark"),
+    ("mysql", "mysql"),
+    ("mariadb", "mysql"),
+    ("aurora", "mysql"),
+    ("mongo", "mongodb"),
+    ("elasticsearch", "elasticsearch"),
+    ("opensearch", "elasticsearch"),
+    ("solr", "elasticsearch"),
+    ("nginx", "nginx"),
+    ("ingress", "nginx"),
+    ("gateway", "nginx"),
+    ("haproxy", "nginx"),
+    ("envoy", "nginx"),
+    ("rabbitmq", "rabbitmq"),
+    ("celery", "rabbitmq"),
+    ("docker", "docker"),
+    ("container", "docker"),
+    ("aws", "aws"),
+    ("amazon", "aws"),
+    ("lambda", "aws"),
+    ("gcp", "gcp"),
+    ("bigquery", "gcp"),
+    ("cloud run", "gcp"),
+    ("azure", "azure"),
+    ("blob", "azure"),
+    ("database", "database"),
+    ("cache", "cache"),
+    ("memcache", "cache"),
+]
+
+
+def resolve_icon_key(label: str) -> Optional[str]:
+    """Return the MAPPING key for *label*, or None if not recognised.
+
+    Performs a case-insensitive substring search against _KEYWORDS in order.
+    """
+    label_low = label.lower()
+    for keyword, key in _KEYWORDS:
+        if keyword in label_low:
+            return key
+    return None
 
 
 def _strip_ns(tag: str) -> str:
@@ -58,6 +144,20 @@ def _read_icon_svg(name: str) -> ET.Element:
     return root
 
 
+def _icon_position_from_group(target: ET.Element) -> tuple[float, float, float, float]:
+    """Return (x, y, width, height) for the icon <use>, derived from the first
+    <rect> found in *target*.  Falls back to (0, 0, 24, 24) if no rect found.
+    """
+    for child in target.iter():
+        if _strip_ns(child.tag) == "rect":
+            rx = float(child.attrib.get("x", 0))
+            ry = float(child.attrib.get("y", 0))
+            rh = float(child.attrib.get("height", 32))
+            icon_size = min(rh * 0.65, 32)
+            return rx, ry, icon_size, icon_size
+    return 0.0, 0.0, 24.0, 24.0
+
+
 def inject_icons(svg_text: str, node_service_map: Dict[str, str]) -> str:
     """Inject icons into `svg_text`.
 
@@ -77,23 +177,22 @@ def inject_icons(svg_text: str, node_service_map: Dict[str, str]) -> str:
         defs = ET.Element("defs", {"id": "icon-sprite"})
         root.insert(0, defs)
 
-    used_symbol_ids = set()
+    # Pre-populate from symbols already present in the sprite (idempotence guard)
+    used_symbol_ids: set[str] = set()
+    for existing in list(defs):
+        sid = existing.attrib.get("id")
+        if sid:
+            used_symbol_ids.add(sid)
 
     for node_id, token in node_service_map.items():
-        token_norm = token.lower().strip()
-        mapped = MAPPING.get(token_norm)
+        # Resolve token → MAPPING key using keyword matching, then direct lookup
+        resolved_key = resolve_icon_key(token) or token.lower().strip()
+        mapped = MAPPING.get(resolved_key)
         if mapped:
             fname = mapped
-            symbol_id = f"icon-{token_norm}"
+            symbol_id = f"icon-{resolved_key}"
         else:
-            # fallback to generic icon and a canonical symbol id
             fname = "service-generic.svg"
-            symbol_id = "icon-service-generic"
-
-        # determine canonical symbol id (mapped or generic)
-        if mapped:
-            symbol_id = f"icon-{token_norm}"
-        else:
             symbol_id = "icon-service-generic"
 
         if symbol_id not in used_symbol_ids:
@@ -127,7 +226,7 @@ def inject_icons(svg_text: str, node_service_map: Dict[str, str]) -> str:
         if target is None:
             # try data-service attribute matching
             for el in root.iter():
-                if el.attrib.get("data-service") == token_norm:
+                if el.attrib.get("data-service") == resolved_key:
                     target = el
                     break
         if target is None:
@@ -145,8 +244,18 @@ def inject_icons(svg_text: str, node_service_map: Dict[str, str]) -> str:
         if already_injected:
             continue
 
+        # Compute position from the bounding rect inside the node group
+        ix, iy, iw, ih = _icon_position_from_group(target)
+
         # create <use> with both href and xlink:href for compatibility
-        use = ET.Element("use", {"href": f"#{symbol_id}", "class": "injected-icon"})
+        use = ET.Element("use", {
+            "href": f"#{symbol_id}",
+            "class": "node-icon",
+            "x": str(ix),
+            "y": str(iy),
+            "width": str(iw),
+            "height": str(ih),
+        })
         # set xlink:href attribute in the proper namespace
         use.attrib["{http://www.w3.org/1999/xlink}href"] = f"#{symbol_id}"
         # place use as first child of target
