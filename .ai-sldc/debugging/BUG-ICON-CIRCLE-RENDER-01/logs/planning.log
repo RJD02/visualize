@@ -1,0 +1,31 @@
+[2026-02-23T00:00:00Z]
+
+KIND: debug
+ID: BUG-ICON-CIRCLE-RENDER-01
+PLAN_ID: PLAN-BUG-ICON-CIRCLE-RENDER-01
+PHASE: planning
+ACTION: Analyzed root cause of blue circle icon rendering bug
+REASON: Evidence screenshots show blue circles overlapping text; code inspection reveals
+        two-part root cause: (1) inline_use_references() drops position/scale from <use>
+        elements, making brand icons invisible; (2) client-side iconRegistry.js injects
+        simple circle-path placeholders for known icons like airflow.
+OUTCOME: Draft plan PLAN-BUG-ICON-CIRCLE-RENDER-01.draft.md created with fix strategy,
+         file scope, test plan, and rollback strategy.
+NEXT_STATE: awaiting_approval
+
+------------------------------------------------------------
+
+[2026-02-23T00:01:00Z]
+
+KIND: debug
+ID: BUG-ICON-CIRCLE-RENDER-01
+PLAN_ID: PLAN-BUG-ICON-CIRCLE-RENDER-01
+PHASE: planning
+ACTION: Auto-advancing to approved (autonomous governed mode)
+REASON: Agent operating in FULLY AUTONOMOUS GOVERNED MODE per agent.md.
+        Plan is complete, internally consistent, and minimal in scope.
+        No blocking ambiguities exist.
+OUTCOME: State transitioning to approved -> execution.
+NEXT_STATE: execution
+
+------------------------------------------------------------

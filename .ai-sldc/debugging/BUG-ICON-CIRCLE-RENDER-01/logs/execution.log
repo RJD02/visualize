@@ -1,0 +1,54 @@
+[2026-02-23T00:02:00Z]
+
+KIND: debug
+ID: BUG-ICON-CIRCLE-RENDER-01
+PLAN_ID: PLAN-BUG-ICON-CIRCLE-RENDER-01
+PHASE: execution
+ACTION: Removed inline_use_references() calls from src/server.py render pipeline
+REASON: inline_use_references() replaced <use> elements with plain <g> elements,
+        discarding the x/y/width/height position and scale attributes. This caused
+        brand icons to render at wrong position (0,0) and unscaled (128x128 instead
+        of 20x20 SVG units), making them invisible. Browsers render <use>→<symbol>
+        natively for inline SVG — no inlining step required.
+OUTCOME: Removed two try/except blocks (~10 lines each) in the static and GET render
+         endpoints. _auto_inject_icons() now emits <symbol>+<use> without further
+         transformation.
+NEXT_STATE: execution (continue)
+
+------------------------------------------------------------
+
+[2026-02-23T00:03:00Z]
+
+KIND: debug
+ID: BUG-ICON-CIRCLE-RENDER-01
+PLAN_ID: PLAN-BUG-ICON-CIRCLE-RENDER-01
+PHASE: execution
+ACTION: Added data-icon-injected guard to postProcessSvgWithIcons() in iconRegistry.js
+REASON: Client-side icon injection in ui/src/diagram/iconRegistry.js was injecting
+        simplified circle-like placeholder paths (e.g. airflow = circle path) into
+        ALL recognized node groups, even those already processed by the server-side
+        brand icon pipeline. The client circle paths rendered visibly because they
+        were correctly positioned, while server brand icons were invisible due to
+        wrong scale/position. Guard prevents double-injection by checking
+        data-icon-injected="1" on node groups before injecting client-side icons.
+OUTCOME: Added 5-line guard block after targetGroup is found in the forEach loop.
+NEXT_STATE: execution (continue)
+
+------------------------------------------------------------
+
+[2026-02-23T00:04:00Z]
+
+KIND: debug
+ID: BUG-ICON-CIRCLE-RENDER-01
+PLAN_ID: PLAN-BUG-ICON-CIRCLE-RENDER-01
+PHASE: execution
+ACTION: Updated unit tests in test_icon_injection_visibility.py and icon_registry.test.js
+REASON: Test plan required: (1) verify <use> has position attributes, (2) verify brand
+        icons contain real paths not circle fallback, (3) verify data-icon-injected flag
+        is set, (4) verify pipeline does not call inline_use_references, (5) verify
+        client guard prevents double-injection.
+OUTCOME: 5 Python unit tests added/updated; 1 JSDOM-based guard regression test added
+         to icon_registry.test.js; 2 Playwright tests added to icon_presence.spec.js.
+NEXT_STATE: testing
+
+------------------------------------------------------------
